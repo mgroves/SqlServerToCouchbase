@@ -50,7 +50,7 @@ namespace SqlServerToCouchbase.Console
                 System.Console.WriteLine("Collections have been created. Press ENTER to continue.");
                 System.Console.ReadLine();
 
-                //await convert.Migrate(createIndexes: true);
+                await convert.Migrate(createIndexes: true);
 
                 System.Console.WriteLine("Indexes have been created. Press ENTER to continue.");
                 System.Console.ReadLine();
