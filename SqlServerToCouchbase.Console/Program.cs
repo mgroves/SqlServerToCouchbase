@@ -1,4 +1,6 @@
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Generic;
+using System.Net.Http;
 using System.Threading.Tasks;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -9,6 +11,9 @@ namespace SqlServerToCouchbase.Console
     {
         static async Task Main(string[] args)
         {
+            // setup config object for SqlToCb
+
+            // UseSchemaForScope = false
             var tableNameToCollectionMapping = new Dictionary<string, string>
             {
                 {"Production_ProductListPriceHistory", "Production_ProductListPrHist"},
@@ -20,6 +25,12 @@ namespace SqlServerToCouchbase.Console
                 {"Sales_SalesOrderHeaderSalesReason", "Sales_SalesOrderHeadSalRea"}
             };
 
+            // UseSchemaForScope = true
+            // var tableNameToCollectionMappingScoped = new Dictionary<string, string>
+            // {
+            //     {"ProductModelProductDescriptionCulture", "ProductModelProductDescCult"}
+            // };
+
             var config = new SqlToCbConfig
             {
                 SourceSqlConnectionString = "Server=localhost;Database=AdventureWorks2016;Trusted_Connection=True;",
@@ -28,11 +39,28 @@ namespace SqlServerToCouchbase.Console
                 TargetConnectionString = "couchbase://localhost",
                 TargetPassword = "password",
                 TargetUsername = "Administrator",
-                TableNameToCollectionMapping = tableNameToCollectionMapping
+                TableNameToCollectionMapping = tableNameToCollectionMapping,
+                UseSchemaForScope = false,
+                UseDefaultScopeForDboSchema = true
             };
 
-            var logger = GetConsoleLogger();
-            var convert = new SqlToCb(config, logger);
+            // setup DI for logging/HTTP
+            var serviceProvider = new ServiceCollection()
+                .AddLogging(builder => builder
+                    .AddConsole()
+                    .AddFilter(level => level >= LogLevel.Information)
+                )
+                .AddHttpClient()
+                .AddSingleton<SqlToCbConfig>(config)
+                .AddTransient<SqlToCb>()
+                .BuildServiceProvider();
+
+            // since this is a console app, just use locator to get a SqlToCb instance
+            var convert = serviceProvider.GetService<SqlToCb>();
+
+            // double check
+            if(convert == null)
+                throw new Exception("Something went wrong instantiating a SqlToCb object");
 
             try
             {
@@ -61,17 +89,6 @@ namespace SqlServerToCouchbase.Console
             {
                 convert.Dispose();
             }
-        }
-
-        private static ILogger GetConsoleLogger()
-        {
-            var serviceCollection = new ServiceCollection();
-            serviceCollection.AddLogging(builder => builder
-                .AddConsole()
-                .AddFilter(level => level >= LogLevel.Information)
-            );
-            var loggerFactory = serviceCollection.BuildServiceProvider().GetService<ILoggerFactory>();
-            return loggerFactory.CreateLogger<Program>();
         }
     }
 }

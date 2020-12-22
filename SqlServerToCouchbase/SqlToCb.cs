@@ -5,6 +5,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using Couchbase;
 using Couchbase.Core.IO.Serializers;
+using Couchbase.Diagnostics;
 using Couchbase.Management.Buckets;
 using Couchbase.Management.Collections;
 using Dapper;
@@ -23,11 +24,12 @@ namespace SqlServerToCouchbase
         private IBucket _bucket;
         private Dictionary<string, List<string>> _primaryKeyNames;
         private bool _isValid;
+        private ICouchbaseCollectionManager _collManager;
 
-        public SqlToCb(SqlToCbConfig config, ILogger logger)
+        public SqlToCb(SqlToCbConfig config, ILoggerFactory loggerFactory)
         {
             _config = config;
-            _logger = logger;
+            _logger = loggerFactory.CreateLogger<SqlToCb>();
             _isValid = false;
         }
 
@@ -85,17 +87,15 @@ namespace SqlServerToCouchbase
                 WHERE TABLE_TYPE = 'BASE TABLE'")).ToList();
             foreach (var table in tables)
             {
-                string tableName = table.TABLE_SCHEMA + '_' + table.TABLE_NAME;
-                if (tableName.Length <= 30)
+                string collectionName = GetCollectionName(table.TABLE_SCHEMA, table.TABLE_NAME);
+                if (collectionName.Length <= 30)
                 {
-                    _logger.LogInformation($"Name `{tableName}` is fine.");
+                    _logger.LogInformation($"Name `{collectionName}` is fine.");
                     continue;
                 }
-
-                var hasMapping = _config.TableNameToCollectionMapping.ContainsKey(tableName);
-                if (!hasMapping)
+                else
                 {
-                    _logger.LogError($"Name `{tableName}` is too long and no mapping found. Can't continue.");
+                    _logger.LogError($"Name `{collectionName}` is too long. Can't continue.");
                     _isValid = false;
                     return;
                 }
@@ -152,6 +152,8 @@ namespace SqlServerToCouchbase
                 _logger.LogInformation("already exists.");
             }
             _bucket = await _cluster.BucketAsync(_config.TargetBucket);
+
+            _collManager = _bucket.Collections;
         }
 
         private async Task ConnectBucket()
@@ -165,32 +167,71 @@ namespace SqlServerToCouchbase
                 select TABLE_SCHEMA, TABLE_NAME
                 from INFORMATION_SCHEMA.TABLES
                 WHERE TABLE_TYPE = 'BASE TABLE'")).ToList();
-            var collManager = _bucket.Collections;
             foreach (var table in tables)
             {
-                string rawCollectionName = table.TABLE_SCHEMA + '_' + table.TABLE_NAME;
-                var collectionName = _config.TableNameToCollectionMapping.ContainsKey(rawCollectionName)
-                    ? _config.TableNameToCollectionMapping[rawCollectionName]
-                    : rawCollectionName;
+                string collectionName = GetCollectionName(table.TABLE_SCHEMA, table.TABLE_NAME);
+                string scopeName = GetScopeName(table.TABLE_SCHEMA);
 
                 _logger.LogInformation($"Creating collection `{collectionName}`...");
-                if (CollectionExists(collectionName))
+
+                await CreateScopeIfNecessary(scopeName);
+
+                if (CollectionExists(collectionName, scopeName))
                 {
                     _logger.LogInformation("already exists.");
                     continue;
                 }
         
-                var spec = new CollectionSpec("_default", collectionName);
-                await collManager.CreateCollectionAsync(spec);
+                var spec = new CollectionSpec(scopeName, collectionName);
+                await _collManager.CreateCollectionAsync(spec);
                 _logger.LogInformation("Done");
             }
         }
 
-        private bool CollectionExists(string collectionName)
+        private async Task CreateScopeIfNecessary(string scopeName)
         {
             try
             {
-                _bucket.Collection(collectionName);
+                _bucket.Scope(scopeName);
+            }
+            catch (ScopeNotFoundException)
+            {
+                _logger.LogInformation($"Creating Scope `{scopeName}`...");
+                var spec = new ScopeSpec(scopeName);
+                await _collManager.CreateScopeAsync(spec);
+            }
+            
+            _logger.LogInformation($"Done");
+        }
+
+        private object GetScopeName(string tableSchema)
+        {
+            if (!_config.UseSchemaForScope) return "_default";
+            if (_config.UseDefaultScopeForDboSchema && tableSchema == "dbo")
+                return "_default";
+            return tableSchema;
+        }
+
+        private string GetCollectionName(string tableSchema, string tableName)
+        {
+            string rawCollectionName;
+            if (!_config.UseSchemaForScope)
+                rawCollectionName = tableSchema + '_' + tableName;
+            else
+                rawCollectionName = tableName;
+            var collectionName = _config.TableNameToCollectionMapping.ContainsKey(rawCollectionName)
+                ? _config.TableNameToCollectionMapping[rawCollectionName]
+                : rawCollectionName;
+            return collectionName;
+        }
+
+        private bool CollectionExists(string collectionName, string scopeName)
+        {
+            try
+            {
+                // TODO: there might be a bug here (NBCB-2767)
+                var scope = _bucket.Scope(scopeName);
+                scope.Collection(collectionName);
                 return true;
             }
             catch (Couchbase.Core.Exceptions.CollectionNotFoundException)
@@ -205,7 +246,8 @@ namespace SqlServerToCouchbase
             var indexes = (await _sqlConnection.QueryAsync(@"
                 select i.[name] as index_name,
                     substring(column_names, 1, len(column_names)-1) as [columns],
-                    schema_name(t.schema_id) + '.' + t.[name] as table_view
+                    schema_name(t.schema_id) AS schema_name, 
+					t.[name] as table_name
                 from sys.objects t
                     inner join sys.indexes i
                         on t.object_id = i.object_id
@@ -221,23 +263,20 @@ namespace SqlServerToCouchbase
                 where t.is_ms_shipped <> 1
                 and index_id > 0
                 and t.[type] = 'U'
-                order by i.[name]
                 ")).ToList();
             var indexManager = _cluster.QueryIndexes;
             foreach (var index in indexes)
             {
                 string indexName = index.index_name.ToString();
 
-
-                var collectionName = index.table_view.ToString().Replace(".", "_");
-                if (_config.TableNameToCollectionMapping.ContainsKey(collectionName))
-                    collectionName = _config.TableNameToCollectionMapping[collectionName];
+                var collectionName = GetCollectionName(index.schema_name, index.table_name); // index.table_view.ToString(). Replace(".", "_");
+                var scopeName = GetScopeName(index.schema_name);
                 _logger.LogInformation($"SQL Server Index: `{indexName}`...");
                 string fields = string.Join(",", ((string)index.columns)
                     .Split(',')
                     .Select(f => $"`{f}`"));
                 await _cluster.QueryAsync<dynamic>(
-                    $"CREATE INDEX `sql_{indexName}` ON `{_config.TargetBucket}`.`_default`.`{collectionName}` ({fields})");
+                    $"CREATE INDEX `sql_{indexName}` ON `{_config.TargetBucket}`.`{scopeName}`.`{collectionName}` ({fields})");
                 _logger.LogInformation("Done.");
             }
         }
@@ -256,9 +295,7 @@ namespace SqlServerToCouchbase
 
         private async Task CopyDataFromTableToCollection(string tableSchema, string tableName)
         {
-            var collectionName = tableSchema + "_" + tableName;
-            if (_config.TableNameToCollectionMapping.ContainsKey(collectionName))
-                collectionName = _config.TableNameToCollectionMapping[collectionName];
+            var collectionName = GetCollectionName(tableSchema,tableName);
 
             _logger.LogInformation($"Copying data from `{tableSchema}.{tableName}` table to {collectionName} collection...");
             var counter = 0;
@@ -298,16 +335,5 @@ namespace SqlServerToCouchbase
                          string.Join("::", keys.Select(k => Dynamic.InvokeGet(row, k)));
             return newKey;
         }
-    }
-
-    public class SqlToCbConfig
-    {
-        public string SourceSqlConnectionString { get; set; }
-        public string TargetConnectionString { get; set; }
-        public string TargetUsername { get; set; }
-        public string TargetPassword { get; set; }
-        public string TargetBucket { get; set; }
-        public int TargetBucketRamQuotaMB { get; set; }
-        public IDictionary<string,string> TableNameToCollectionMapping { get; set; }
     }
 }

@@ -5,7 +5,12 @@ VisualStudioVersion = 16.0.30804.86
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "SqlServerToCouchbase.Console", "SqlServerToCouchbase.Console\SqlServerToCouchbase.Console.csproj", "{4067D123-F213-4FBC-849D-EF7D3F8D5156}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SqlServerToCouchbase", "SqlServerToCouchbase\SqlServerToCouchbase.csproj", "{57489DBA-688F-4A10-9B51-1528871FDA9B}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "SqlServerToCouchbase", "SqlServerToCouchbase\SqlServerToCouchbase.csproj", "{57489DBA-688F-4A10-9B51-1528871FDA9B}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{BCFC6D13-EA9F-4A46-9F82-DA84A77581A9}"
+	ProjectSection(SolutionItems) = preProject
+		README.md = README.md
+	EndProjectSection
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
