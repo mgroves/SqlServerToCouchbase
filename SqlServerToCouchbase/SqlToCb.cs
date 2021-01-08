@@ -5,9 +5,9 @@ using System.Linq;
 using System.Threading.Tasks;
 using Couchbase;
 using Couchbase.Core.IO.Serializers;
-using Couchbase.Diagnostics;
 using Couchbase.Management.Buckets;
 using Couchbase.Management.Collections;
+using Couchbase.Management.Users;
 using Dapper;
 using Dynamitey;
 using Microsoft.Extensions.Logging;
@@ -103,12 +103,25 @@ namespace SqlServerToCouchbase
             _isValid = true;
         }
 
+        /// <summary>
+        /// Start one or more Migration processes
+        /// </summary>
+        /// <param name="validateNames">Check to make sure the table names are short enough or are mapped properly</param>
+        /// <param name="createBucket">Create a Couchbase bucket to match the SQL catalog</param>
+        /// <param name="createCollections">Create Couchbase collections to match the SQL tables</param>
+        /// <param name="createIndexes">Create Couchbase indexes to match the SQL indexes</param>
+        /// <param name="copyData">Create Couchbase documents to match the SQL rows</param>
+        /// <param name="sampleForDemo">Only create a sample set of Couchbase documents/indexes - only suitable for demos!</param>
+        /// <param name="createUsers">Create Couchbase users to match the SQL users</param>
+        /// <returns></returns>
         public async Task Migrate(
             bool validateNames = false,
             bool createBucket = false,
             bool createCollections = false,
             bool createIndexes = false,
-            bool copyData = false)
+            bool copyData = false,
+            bool sampleForDemo = false,
+            bool createUsers = false)
         {
             if (validateNames) await ValidateNames();
 
@@ -127,9 +140,76 @@ namespace SqlServerToCouchbase
 
             if (createCollections) await CreateCollections();
 
-            if (createIndexes) await CreateIndexes();
+            if (createIndexes) await CreateIndexes(sampleForDemo);
 
-            if (copyData) await CopyData();
+            if (copyData) await CopyData(sampleForDemo);
+
+            if (createUsers) await CreateUsers();
+        }
+
+        private async Task CreateUsers()
+        {
+            var userManager = _cluster.Users;
+
+            var group = new Group("MigratedUsers");
+
+            await userManager.UpsertGroupAsync(group);
+
+            var users = (await _sqlConnection.QueryAsync(@"
+                SELECT u.name
+                FROM sys.sysusers u
+                WHERE u.issqlrole = 0
+                AND u.hasdbaccess = 1")).ToList();
+            foreach (var user in users)
+            {
+                string userName = user.name.ToString();
+                var permissions = (await _sqlConnection.QueryAsync(@"
+SELECT p.permission_name, SCHEMA_NAME(t.schema_id) AS SchemaName, OBJECT_NAME(p.major_id) AS TableName -- class_desc, major_id, permission_name, state_desc
+  FROM sys.database_permissions p
+  INNER JOIN sys.tables t ON p.major_id = t.object_id
+  INNER JOIN sys.sysusers u ON USER_ID(u.name) = p.grantee_principal_id
+  WHERE p.grantee_principal_id = USER_ID(@userName)
+  AND  p.class_desc = 'OBJECT_OR_COLUMN'
+  AND p.permission_name IN ('INSERT', 'SELECT', 'UPDATE', 'DELETE')", new { userName })).ToList();
+
+                var roles = new List<Role>();
+                var couchbaseUser = new User(userName);
+                couchbaseUser.DisplayName = userName;
+                couchbaseUser.Password = _config.DefaultPasswordForUsers;
+                couchbaseUser.Groups = new List<string> { "MigratedUsers" };
+
+                foreach (var permission in permissions)
+                {
+                    string permissionName = permission.permission_name.ToString();
+                    string schemaName = permission.SchemaName.ToString();
+                    string tableName = permission.TableName.ToString();
+
+                    var collectionName = GetCollectionName(schemaName, tableName);
+                    var scopeName = GetScopeName(schemaName);
+                    switch (permissionName)
+                    {
+                        case "INSERT":
+                            roles.Add(new Role("insert???", _config.TargetBucket, scopeName, collectionName));
+                            break;
+                        case "SELECT":
+                            roles.Add(new Role("select???", _config.TargetBucket, scopeName, collectionName));
+                            break;
+                        case "UPDATE":
+                            roles.Add(new Role("update???", _config.TargetBucket, scopeName, collectionName));
+                            break;
+                        case "DELETE":
+                            roles.Add(new Role("delete???", _config.TargetBucket, scopeName, collectionName));
+                            break;
+                        default:
+                            _logger.LogWarning($"Permission name was `{permissionName}`, which is not INSERT, SELECT, UPDATE, DELETE. It's not being copied over to Couchbase");
+                            break;
+                    }
+                }
+
+                couchbaseUser.Roles = roles;
+
+                await userManager.UpsertUserAsync(user);
+            }
         }
 
         private async Task CreateBucket()
@@ -204,7 +284,7 @@ namespace SqlServerToCouchbase
             _logger.LogInformation($"Done");
         }
 
-        private object GetScopeName(string tableSchema)
+        private string GetScopeName(string tableSchema)
         {
             if (!_config.UseSchemaForScope) return "_default";
             if (_config.UseDefaultScopeForDboSchema && tableSchema == "dbo")
@@ -240,7 +320,7 @@ namespace SqlServerToCouchbase
             }
         }
 
-        private async Task CreateIndexes()
+        private async Task CreateIndexes(bool sampleForDemo = false)
         {
             _logger.LogInformation("Creating indexes...");
             var indexes = (await _sqlConnection.QueryAsync(@"
@@ -264,7 +344,10 @@ namespace SqlServerToCouchbase
                 and index_id > 0
                 and t.[type] = 'U'
                 ")).ToList();
-            var indexManager = _cluster.QueryIndexes;
+
+            if (sampleForDemo)
+                indexes = indexes.Take(25).ToList();
+
             foreach (var index in indexes)
             {
                 string indexName = index.index_name.ToString();
@@ -281,7 +364,7 @@ namespace SqlServerToCouchbase
             }
         }
 
-        private async Task CopyData()
+        private async Task CopyData(bool sampleData = false)
         {
             _primaryKeyNames = new Dictionary<string, List<string>>();
 
@@ -290,10 +373,10 @@ namespace SqlServerToCouchbase
                 from INFORMATION_SCHEMA.TABLES
                 WHERE TABLE_TYPE = 'BASE TABLE'")).ToList();
             foreach (var table in tables)
-                await CopyDataFromTableToCollection(table.TABLE_SCHEMA, table.TABLE_NAME);
+                await CopyDataFromTableToCollection(table.TABLE_SCHEMA, table.TABLE_NAME, sampleData);
         }
 
-        private async Task CopyDataFromTableToCollection(string tableSchema, string tableName)
+        private async Task CopyDataFromTableToCollection(string tableSchema, string tableName, bool sampleData = false)
         {
             var collectionName = GetCollectionName(tableSchema,tableName);
 
@@ -302,7 +385,7 @@ namespace SqlServerToCouchbase
 
             var collection = _bucket.Collection(collectionName);
             var rows = _sqlConnection.Query($@"
-                SELECT *
+                SELECT {(sampleData ? "TOP 100" : "")} *
                 FROM [{tableSchema}].[{tableName}]");
 
             _logger.LogInformation("Writing row(s)...");
@@ -330,9 +413,10 @@ namespace SqlServerToCouchbase
                 _primaryKeyNames.Add($"{tableSchema}.{tableName}", keyNames.ToList());
             }
 
+            // append key values together with :: delimeter
+            // for compound keys
             var keys = _primaryKeyNames[$"{tableSchema}.{tableName}"];
-            var newKey = $"{tableSchema}::{tableName}::" +
-                         string.Join("::", keys.Select(k => Dynamic.InvokeGet(row, k)));
+            var newKey = string.Join("::", keys.Select(k => Dynamic.InvokeGet(row, k)));
             return newKey;
         }
     }

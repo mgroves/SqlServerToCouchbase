@@ -1,6 +1,5 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Net.Http;
 using System.Threading.Tasks;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -11,7 +10,8 @@ namespace SqlServerToCouchbase.Console
     {
         static async Task Main(string[] args)
         {
-            // setup config object for SqlToCb
+            System.Console.WriteLine("Press ENTER to start migration.");
+            System.Console.ReadLine();
 
             // UseSchemaForScope = false
             var tableNameToCollectionMapping = new Dictionary<string, string>
@@ -31,6 +31,7 @@ namespace SqlServerToCouchbase.Console
             //     {"ProductModelProductDescriptionCulture", "ProductModelProductDescCult"}
             // };
 
+            // setup config object for SqlToCb
             var config = new SqlToCbConfig
             {
                 SourceSqlConnectionString = "Server=localhost;Database=AdventureWorks2016;Trusted_Connection=True;",
@@ -41,7 +42,8 @@ namespace SqlServerToCouchbase.Console
                 TargetUsername = "Administrator",
                 TableNameToCollectionMapping = tableNameToCollectionMapping,
                 UseSchemaForScope = false,
-                UseDefaultScopeForDboSchema = true
+                UseDefaultScopeForDboSchema = true,
+                DefaultPasswordForUsers = "Change*This*Password*123"
             };
 
             // setup DI for logging/HTTP
@@ -78,12 +80,20 @@ namespace SqlServerToCouchbase.Console
                 System.Console.WriteLine("Collections have been created. Press ENTER to continue.");
                 System.Console.ReadLine();
 
-                await convert.Migrate(createIndexes: true);
+                //await convert.Migrate(createUsers: true);
+
+                //System.Console.WriteLine("Users have been created. Press ENTER to continue.");
+                //System.Console.ReadLine();
+
+                //await convert.Migrate(createIndexes: true, sampleForDemo: true);
 
                 System.Console.WriteLine("Indexes have been created. Press ENTER to continue.");
                 System.Console.ReadLine();
 
-                await convert.Migrate(copyData: true);
+                await convert.Migrate(copyData: true, sampleForDemo: true);
+
+                System.Console.WriteLine("Data has been copied. Press ENTER to continue.");
+                System.Console.ReadLine();
             }
             finally
             {

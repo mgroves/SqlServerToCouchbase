@@ -13,5 +13,6 @@ namespace SqlServerToCouchbase
         public IDictionary<string,string> TableNameToCollectionMapping { get; set; }
         public bool UseSchemaForScope { get; set; }
         public bool UseDefaultScopeForDboSchema { get; set; }
+        public string DefaultPasswordForUsers { get; set; }
     }
 }
