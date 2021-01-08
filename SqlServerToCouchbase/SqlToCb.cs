@@ -4,7 +4,9 @@ using System.Data.SqlClient;
 using System.Linq;
 using System.Threading.Tasks;
 using Couchbase;
+using Couchbase.Core.Exceptions;
 using Couchbase.Core.IO.Serializers;
+using Couchbase.KeyValue;
 using Couchbase.Management.Buckets;
 using Couchbase.Management.Collections;
 using Couchbase.Management.Users;
@@ -261,9 +263,17 @@ SELECT p.permission_name, SCHEMA_NAME(t.schema_id) AS SchemaName, OBJECT_NAME(p.
                     _logger.LogInformation("already exists.");
                     continue;
                 }
-        
-                var spec = new CollectionSpec(scopeName, collectionName);
-                await _collManager.CreateCollectionAsync(spec);
+
+                try
+                {
+                    var spec = new CollectionSpec(scopeName, collectionName);
+                    await _collManager.CreateCollectionAsync(spec);
+                }
+                catch
+                {
+                    _logger.LogError($"Unable to create collection `{collectionName}` in scope `{scopeName}`");
+                    throw;
+                }
                 _logger.LogInformation("Done");
             }
         }
@@ -295,13 +305,27 @@ SELECT p.permission_name, SCHEMA_NAME(t.schema_id) AS SchemaName, OBJECT_NAME(p.
         private string GetCollectionName(string tableSchema, string tableName)
         {
             string rawCollectionName;
+
+            // if not using schema<-> translation, then:
+            //  dbo.Foo => Foo
+            //  Foo.Bar => Foo_Bar
             if (!_config.UseSchemaForScope)
-                rawCollectionName = tableSchema + '_' + tableName;
+                rawCollectionName = (tableSchema == "dbo" ? "" : (tableSchema + '_')) + tableName;
+            
+            // otherwise:
+            // dbo.Foo => _default (scope) -> Foo (collection)
+            // Foo.Bar => Foo (scope) -> Bar (collection)
             else
                 rawCollectionName = tableName;
+
+            // use the mapping if there is one, collection names are limited to 30 characters
             var collectionName = _config.TableNameToCollectionMapping.ContainsKey(rawCollectionName)
                 ? _config.TableNameToCollectionMapping[rawCollectionName]
                 : rawCollectionName;
+
+            // remove spaces--allowed in table names, not allowed in collection name
+            collectionName = collectionName.Replace(" ", "-");
+
             return collectionName;
         }
 
@@ -352,14 +376,23 @@ SELECT p.permission_name, SCHEMA_NAME(t.schema_id) AS SchemaName, OBJECT_NAME(p.
             {
                 string indexName = index.index_name.ToString();
 
-                var collectionName = GetCollectionName(index.schema_name, index.table_name); // index.table_view.ToString(). Replace(".", "_");
+                var collectionName = GetCollectionName(index.schema_name, index.table_name);
                 var scopeName = GetScopeName(index.schema_name);
                 _logger.LogInformation($"SQL Server Index: `{indexName}`...");
                 string fields = string.Join(",", ((string)index.columns)
                     .Split(',')
                     .Select(f => $"`{f}`"));
-                await _cluster.QueryAsync<dynamic>(
-                    $"CREATE INDEX `sql_{indexName}` ON `{_config.TargetBucket}`.`{scopeName}`.`{collectionName}` ({fields})");
+
+                try
+                {
+                    await _cluster.QueryAsync<dynamic>(
+                        $"CREATE INDEX `sql_{indexName}` ON `{_config.TargetBucket}`.`{scopeName}`.`{collectionName}` ({fields})");
+                }
+                catch (IndexExistsException)
+                {
+                    _logger.LogInformation($"Index sql_{indexName} already exists.");
+                }
+
                 _logger.LogInformation("Done.");
             }
         }
@@ -369,9 +402,11 @@ SELECT p.permission_name, SCHEMA_NAME(t.schema_id) AS SchemaName, OBJECT_NAME(p.
             _primaryKeyNames = new Dictionary<string, List<string>>();
 
             var tables = (await _sqlConnection.QueryAsync(@"
-                select TABLE_SCHEMA, TABLE_NAME
-                from INFORMATION_SCHEMA.TABLES
-                WHERE TABLE_TYPE = 'BASE TABLE'")).ToList();
+                select SCHEMA_NAME(t.schema_id) AS TABLE_SCHEMA, t.name AS TABLE_NAME
+                from sys.tables t
+                where t.temporal_type_desc IN ('SYSTEM_VERSIONED_TEMPORAL_TABLE', 'NON_TEMPORAL_TABLE')
+            ")).ToList();
+
             foreach (var table in tables)
                 await CopyDataFromTableToCollection(table.TABLE_SCHEMA, table.TABLE_NAME, sampleData);
         }
@@ -391,8 +426,20 @@ SELECT p.permission_name, SCHEMA_NAME(t.schema_id) AS SchemaName, OBJECT_NAME(p.
             _logger.LogInformation("Writing row(s)...");
             foreach (var row in rows)
             {
-                var documentKey = await GetDocumentKeyFromPrimaryKeyValues(row, tableSchema, tableName);
-                await collection.UpsertAsync(documentKey, row);
+                string documentKey = null;
+                try
+                {
+                    documentKey = await GetDocumentKeyFromPrimaryKeyValues(row, tableSchema, tableName);
+                    await collection.UpsertAsync(documentKey, row);
+                }
+                catch(Exception ex)
+                {
+                    _logger.LogError($"Error writing.");
+                    _logger.LogError($"Row data: {row}");
+                    _logger.LogError($"Document key: {documentKey}");
+                    _logger.LogError($"Exception message: {ex.Message}");
+                    _logger.LogError($"Exception stack trace: {ex.StackTrace}");
+                }
                 counter++;
                 if ((counter % 1000) == 0)
                     _logger.LogInformation(counter + "...");
@@ -417,6 +464,11 @@ SELECT p.permission_name, SCHEMA_NAME(t.schema_id) AS SchemaName, OBJECT_NAME(p.
             // for compound keys
             var keys = _primaryKeyNames[$"{tableSchema}.{tableName}"];
             var newKey = string.Join("::", keys.Select(k => Dynamic.InvokeGet(row, k)));
+
+            // if there IS no key, generate one
+            if (string.IsNullOrWhiteSpace(newKey))
+                return Guid.NewGuid().ToString();
+
             return newKey;
         }
     }
