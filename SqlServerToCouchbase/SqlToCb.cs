@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using Couchbase;
 using Couchbase.Core.Exceptions;
 using Couchbase.Core.IO.Serializers;
+using Couchbase.KeyValue;
 using Couchbase.Management.Buckets;
 using Couchbase.Management.Collections;
 using Couchbase.Management.Users;
@@ -440,7 +441,17 @@ SELECT p.permission_name, SCHEMA_NAME(t.schema_id) AS SchemaName, OBJECT_NAME(p.
             _logger.LogInformation($"Copying data from `{tableSchema}.{tableName}` table to {collectionName} collection...");
             var counter = 0;
 
-            var collection = _bucket.Collection(collectionName);
+            ICouchbaseCollection collection;
+            if (_config.UseSchemaForScope)
+            {
+                var scopeName = GetScopeName(tableSchema);
+                var scope = _bucket.Scope(scopeName);
+                collection = scope.Collection(collectionName);
+            }
+            else
+            {
+                collection = _bucket.Collection(collectionName);
+            }
             var rows = _sqlConnection.Query($@"
                 SELECT {(sampleData ? "TOP 100" : "")} *
                 FROM [{tableSchema}].[{tableName}]");
