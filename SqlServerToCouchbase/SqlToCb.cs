@@ -2,11 +2,11 @@
 using System.Collections.Generic;
 using System.Data.SqlClient;
 using System.Linq;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using Couchbase;
 using Couchbase.Core.Exceptions;
 using Couchbase.Core.IO.Serializers;
-using Couchbase.KeyValue;
 using Couchbase.Management.Buckets;
 using Couchbase.Management.Collections;
 using Couchbase.Management.Users;
@@ -127,7 +127,7 @@ namespace SqlServerToCouchbase
         {
             if (validateNames) await ValidateNames();
 
-            var shouldContinue = createBucket || createCollections || createIndexes || copyData;
+            var shouldContinue = createBucket || createCollections || createIndexes || copyData || createUsers;
 
             if (!shouldContinue)
                 return;
@@ -153,9 +153,7 @@ namespace SqlServerToCouchbase
         {
             var userManager = _cluster.Users;
 
-            var group = new Group("MigratedUsers");
-
-            await userManager.UpsertGroupAsync(group);
+            Regex regMatchSpecialCharsOnly = new Regex("[^a-zA-Z0-9']");
 
             var users = (await _sqlConnection.QueryAsync(@"
                 SELECT u.name
@@ -164,7 +162,9 @@ namespace SqlServerToCouchbase
                 AND u.hasdbaccess = 1")).ToList();
             foreach (var user in users)
             {
+                _logger.LogInformation($"Processing SQL user `{user.name}`...");
                 string userName = user.name.ToString();
+                string couchbaseUserName = regMatchSpecialCharsOnly.Replace(userName, "-");
                 var permissions = (await _sqlConnection.QueryAsync(@"
 SELECT p.permission_name, SCHEMA_NAME(t.schema_id) AS SchemaName, OBJECT_NAME(p.major_id) AS TableName -- class_desc, major_id, permission_name, state_desc
   FROM sys.database_permissions p
@@ -175,10 +175,9 @@ SELECT p.permission_name, SCHEMA_NAME(t.schema_id) AS SchemaName, OBJECT_NAME(p.
   AND p.permission_name IN ('INSERT', 'SELECT', 'UPDATE', 'DELETE')", new { userName })).ToList();
 
                 var roles = new List<Role>();
-                var couchbaseUser = new User(userName);
-                couchbaseUser.DisplayName = userName;
+                var couchbaseUser = new User(couchbaseUserName);
+                couchbaseUser.DisplayName = couchbaseUserName;
                 couchbaseUser.Password = _config.DefaultPasswordForUsers;
-                couchbaseUser.Groups = new List<string> { "MigratedUsers" };
 
                 foreach (var permission in permissions)
                 {
@@ -191,16 +190,20 @@ SELECT p.permission_name, SCHEMA_NAME(t.schema_id) AS SchemaName, OBJECT_NAME(p.
                     switch (permissionName)
                     {
                         case "INSERT":
-                            roles.Add(new Role("insert???", _config.TargetBucket, scopeName, collectionName));
+                            roles.Add(new Role("query_insert", _config.TargetBucket, scopeName, collectionName));
+                            roles.Add(new Role("data_writer", _config.TargetBucket, scopeName, collectionName));
                             break;
                         case "SELECT":
-                            roles.Add(new Role("select???", _config.TargetBucket, scopeName, collectionName));
+                            roles.Add(new Role("query_select", _config.TargetBucket, scopeName, collectionName));
+                            roles.Add(new Role("data_reader", _config.TargetBucket, scopeName, collectionName));
                             break;
                         case "UPDATE":
-                            roles.Add(new Role("update???", _config.TargetBucket, scopeName, collectionName));
+                            roles.Add(new Role("query_update", _config.TargetBucket, scopeName, collectionName));
+                            roles.Add(new Role("data_writer", _config.TargetBucket, scopeName, collectionName));
                             break;
                         case "DELETE":
-                            roles.Add(new Role("delete???", _config.TargetBucket, scopeName, collectionName));
+                            roles.Add(new Role("query_delete", _config.TargetBucket, scopeName, collectionName));
+                            roles.Add(new Role("data_writer", _config.TargetBucket, scopeName, collectionName));
                             break;
                         default:
                             _logger.LogWarning($"Permission name was `{permissionName}`, which is not INSERT, SELECT, UPDATE, DELETE. It's not being copied over to Couchbase");
@@ -208,9 +211,16 @@ SELECT p.permission_name, SCHEMA_NAME(t.schema_id) AS SchemaName, OBJECT_NAME(p.
                     }
                 }
 
+                // if there are no roles, then assume this user should have access
+                // to everything in the bucket
+                if(!roles.Any())
+                    roles.Add(new Role("bucket_admin", _config.TargetBucket));
+
                 couchbaseUser.Roles = roles;
 
-                await userManager.UpsertUserAsync(user);
+                _logger.LogInformation($"Creating user `{couchbaseUser.DisplayName}`");
+
+                await userManager.UpsertUserAsync(couchbaseUser);
             }
         }
 
@@ -258,7 +268,7 @@ SELECT p.permission_name, SCHEMA_NAME(t.schema_id) AS SchemaName, OBJECT_NAME(p.
 
                 await CreateScopeIfNecessary(scopeName);
 
-                if (CollectionExists(collectionName, scopeName))
+                if (await CollectionExists(collectionName, scopeName))
                 {
                     _logger.LogInformation("already exists.");
                     continue;
@@ -282,13 +292,17 @@ SELECT p.permission_name, SCHEMA_NAME(t.schema_id) AS SchemaName, OBJECT_NAME(p.
         {
             try
             {
-                _bucket.Scope(scopeName);
-            }
-            catch (ScopeNotFoundException)
-            {
-                _logger.LogInformation($"Creating Scope `{scopeName}`...");
+                var scopes = await _bucket.Collections.GetAllScopesAsync();
+                if (scopes.Any(s => s.Name == scopeName))
+                    return;
                 var spec = new ScopeSpec(scopeName);
                 await _collManager.CreateScopeAsync(spec);
+
+                //_bucket.Scope(scopeName);
+            }
+            catch (Exception)
+            {
+                _logger.LogInformation($"Problem creating or checking Scope `{scopeName}`...");
             }
             
             _logger.LogInformation($"Done");
@@ -329,14 +343,22 @@ SELECT p.permission_name, SCHEMA_NAME(t.schema_id) AS SchemaName, OBJECT_NAME(p.
             return collectionName;
         }
 
-        private bool CollectionExists(string collectionName, string scopeName)
+        private async Task<bool> CollectionExists(string collectionName, string scopeName)
         {
             try
             {
+                var scopes = await _bucket.Collections.GetAllScopesAsync();
+                var scope = scopes.SingleOrDefault(s => s.Name == scopeName);
+                if (scope == null)
+                    return false;
+
+                var collections = scope.Collections;
+                return collections.Any(c => c.Name == collectionName);
+
                 // TODO: there might be a bug here (NBCB-2767)
-                var scope = _bucket.Scope(scopeName);
-                scope.Collection(collectionName);
-                return true;
+                // var scope = _bucket.Scope(scopeName);
+                // scope.Collection(collectionName);
+                // return true;
             }
             catch (Couchbase.Core.Exceptions.CollectionNotFoundException)
             {
@@ -370,7 +392,7 @@ SELECT p.permission_name, SCHEMA_NAME(t.schema_id) AS SchemaName, OBJECT_NAME(p.
                 ")).ToList();
 
             if (sampleForDemo)
-                indexes = indexes.Take(25).ToList();
+                indexes = indexes.Take(5).ToList();
 
             foreach (var index in indexes)
             {
