@@ -108,11 +108,11 @@ For complex auth scenarios, users are an area that require a manual audit; user 
 
 ## Known limitations:
 
-* SQL Server views are not translated at all. Couchbase M/R Views are *roughly* equivalent.
+* SQL Server views are not translated at all. [Couchbase M/R Views](https://docs.couchbase.com/server/current/learn/views/views-intro.html) are *roughly* equivalent.
 
-* SQL Server stored procedures (sprocs) and UDFs are not translated at all. Couchbase UDFs are *roughtly* equivalent.
+* SQL Server stored procedures (sprocs) and UDFs are not translated at all. [Couchbase UDFs](https://docs.couchbase.com/server/current/n1ql/n1ql-language-reference/userfun.html) are *roughly* equivalent.
 
-* SQL Server triggers are not translated at all. Couchbase Eventing is the closest equivalent.
+* SQL Server triggers are not translated at all. [Couchbase Eventing](https://docs.couchbase.com/server/current/eventing/eventing-overview.html) is the closest equivalent.
 
 * Collection names in Couchbase are limited to 30 characters. So if a table name (or schema+table name depending on your config) is longer than 30 characters, you'll need to provider a mapping in `Config::TableNameToCollectionMapping`
 
