@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using Couchbase;
 using Couchbase.Core.Exceptions;
 using Couchbase.Core.IO.Serializers;
+using Couchbase.Diagnostics;
 using Couchbase.KeyValue;
 using Couchbase.Management.Buckets;
 using Couchbase.Management.Collections;
@@ -84,6 +85,7 @@ namespace SqlServerToCouchbase
 
         private async Task ValidateNamesAsync()
         {
+            _logger.LogInformation("Now validating names...");
             var tables = (await _sqlConnection.QueryAsync(@"
                 select TABLE_SCHEMA, TABLE_NAME
                 from INFORMATION_SCHEMA.TABLES
@@ -103,6 +105,7 @@ namespace SqlServerToCouchbase
                     return;
                 }
             }
+            _logger.LogInformation("Name validation complete.");
             _isValid = true;
         }
 
@@ -152,6 +155,7 @@ namespace SqlServerToCouchbase
 
         private async Task CreateUsersAsync()
         {
+            _logger.LogInformation("Now creating users...");
             var userManager = _cluster.Users;
 
             Regex regMatchSpecialCharsOnly = new Regex("[^a-zA-Z0-9']");
@@ -223,10 +227,12 @@ SELECT p.permission_name, SCHEMA_NAME(t.schema_id) AS SchemaName, OBJECT_NAME(p.
 
                 await userManager.UpsertUserAsync(couchbaseUser);
             }
+            _logger.LogInformation("User creation complete.");
         }
 
         private async Task CreateBucketAsync()
         {
+            _logger.LogInformation("Attempting to create bucket...");
             var bucketManager = _cluster.Buckets;
             var bucketSettings = new BucketSettings
             {
@@ -238,7 +244,7 @@ SELECT p.permission_name, SCHEMA_NAME(t.schema_id) AS SchemaName, OBJECT_NAME(p.
             try
             {
                 await bucketManager.CreateBucketAsync(bucketSettings);
-                _logger.LogInformation("Done");
+                _logger.LogInformation("Bucket creation complete.");
             }
             catch (BucketExistsException)
             {
@@ -246,7 +252,10 @@ SELECT p.permission_name, SCHEMA_NAME(t.schema_id) AS SchemaName, OBJECT_NAME(p.
             }
 
             _bucket = await _cluster.BucketAsync(_config.TargetBucket);
-            await _bucket.WaitUntilReadyAsync(TimeSpan.FromSeconds(30));
+            var opts = new WaitUntilReadyOptions();
+            opts.DesiredState(ClusterState.Online);
+            opts.ServiceTypes(ServiceType.KeyValue, ServiceType.Query);
+            await _bucket.WaitUntilReadyAsync(TimeSpan.FromSeconds(30), opts);
 
             _collManager = _bucket.Collections;
         }
@@ -258,6 +267,7 @@ SELECT p.permission_name, SCHEMA_NAME(t.schema_id) AS SchemaName, OBJECT_NAME(p.
 
         private async Task CreateCollectionsAsync()
         {
+            _logger.LogInformation("Creating collections...");
             var tables = (await _sqlConnection.QueryAsync(@"
                 select TABLE_SCHEMA, TABLE_NAME
                 from INFORMATION_SCHEMA.TABLES
@@ -289,6 +299,7 @@ SELECT p.permission_name, SCHEMA_NAME(t.schema_id) AS SchemaName, OBJECT_NAME(p.
                 }
                 _logger.LogInformation("Done");
             }
+            _logger.LogInformation("Collection creation complete.");
         }
 
         private async Task CreateScopeIfNecessaryAsync(string scopeName)
@@ -371,7 +382,7 @@ SELECT p.permission_name, SCHEMA_NAME(t.schema_id) AS SchemaName, OBJECT_NAME(p.
 
         private async Task CreateIndexesAsync(bool sampleForDemo = false)
         {
-            _logger.LogInformation("Creating indexes...");
+            _logger.LogInformation($"Creating{(sampleForDemo ? " some sample" : " ")} indexes...");
             var indexes = (await _sqlConnection.QueryAsync(@"
                 select i.[name] as index_name,
                     substring(column_names, 1, len(column_names)-1) as [columns],
@@ -420,10 +431,13 @@ SELECT p.permission_name, SCHEMA_NAME(t.schema_id) AS SchemaName, OBJECT_NAME(p.
 
                 _logger.LogInformation("Done.");
             }
+
+            _logger.LogInformation("Index creation complete.");
         }
 
         private async Task CopyDataAsync(bool sampleData = false)
         {
+            _logger.LogInformation("Copying data started...");
             _primaryKeyNames = new Dictionary<string, List<string>>();
 
             var tables = (await _sqlConnection.QueryAsync(@"
@@ -432,7 +446,7 @@ SELECT p.permission_name, SCHEMA_NAME(t.schema_id) AS SchemaName, OBJECT_NAME(p.
                 where t.temporal_type_desc IN ('SYSTEM_VERSIONED_TEMPORAL_TABLE', 'NON_TEMPORAL_TABLE')
             ")).ToList();
 
-            // *** refresh to attempt to deal with NCBC-2784
+            // *** refresh to workaround NCBC-2784
             Dispose();
             await ConnectAsync();
             await CreateBucketAsync();
@@ -440,6 +454,8 @@ SELECT p.permission_name, SCHEMA_NAME(t.schema_id) AS SchemaName, OBJECT_NAME(p.
 
             foreach (var table in tables)
                 await CopyDataFromTableToCollectionAsync(table.TABLE_SCHEMA, table.TABLE_NAME, sampleData);
+
+            _logger.LogInformation("Copying data complete.");
         }
 
         private async Task CopyDataFromTableToCollectionAsync(string tableSchema, string tableName, bool sampleData = false)
@@ -458,7 +474,6 @@ SELECT p.permission_name, SCHEMA_NAME(t.schema_id) AS SchemaName, OBJECT_NAME(p.
             }
             else
             {
-                // possible bug here: NCBC-2784
                 var scope = _bucket.DefaultScope();
                 collection = scope.Collection(collectionName);
             }

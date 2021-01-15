@@ -1,6 +1,7 @@
 ﻿using System;
-using System.Collections.Generic;
+using System.Linq;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -10,63 +11,28 @@ namespace SqlServerToCouchbase.Console
     {
         static async Task Main(string[] args)
         {
-            System.Console.WriteLine("Press ENTER to start migration.");
-            System.Console.ReadLine();
+            var config = new ConfigurationBuilder()
+                .SetBasePath(AppDomain.CurrentDomain.BaseDirectory)
+                .AddJsonFile("appsettings.json")
+                .AddEnvironmentVariables()
+                .Build();
 
-            // *******************
-            //var tableNameToCollectionMapping = new Dictionary<string, string>();
-            // *******************
+            var tableNameCollectionMapping = config.GetSection("TableNameToCollectionMapping")
+                .GetChildren()
+                .ToDictionary(x => x.Key, x => x.Value);
 
-            // *******************
-            // WorldWideImporters
-            // var tableNameToCollectionMapping = new Dictionary<string, string>
-            // {
-            //     {"Application_StateProvinces_Archive", "Application_StateProv_Arch"},
-            //     {"Warehouse_StockItemTransactions", "Warehouse_StockItemTrans"},
-            //     {"Warehouse_ColdRoomTemperatures_Archive", "Warehouse_ColdRoomTemp_Arch"},
-            //     {"Application_DeliveryMethods_Archive", "Application_DeliveryMeth_Arch"},
-            //     {"Purchasing_SupplierTransactions", "Purchasing_SupplierTrans"},
-            //     {"Application_PaymentMethods_Archive", "Application_PaymentMeth_Arch"},
-            //     {"Application_TransactionTypes_Archive", "Application_TransTypes_Arch"},
-            //     {"Purchasing_SupplierCategories_Archive", "Purchasing_SupplierCat_Arch"},
-            //     {"Sales_CustomerCategories_Archive", "Sales_CustomerCategories_Arch"},
-            // };
-            // *******************
-
-            // *******************
-            // AdventureWorks
-            // UseSchemaForScope = false
-            var tableNameToCollectionMapping = new Dictionary<string, string>
+            var migrateConfig = new SqlToCbConfig
             {
-                {"Production_ProductListPriceHistory", "Production_ProductListPrHist"},
-                {"Production_ProductModelIllustration", "Production_ProductModelIllus"},
-                {"Production_ProductModelProductDescriptionCulture", "Production_ProdMoProdDesCult"},
-                {"Production_TransactionHistoryArchive", "Production_TransactHisArch"},
-                {"HumanResources_EmployeeDepartmentHistory", "HumanResources_EmpDeptHist"},
-                {"HumanResources_EmployeePayHistory", "HumanResources_EmpPayHistory"},
-                {"Sales_SalesOrderHeaderSalesReason", "Sales_SalesOrderHeadSalRea"}
-            };
-
-            // UseSchemaForScope = true
-            // var tableNameToCollectionMapping = new Dictionary<string, string>
-            // {
-            //     {"ProductModelProductDescriptionCulture", "ProductModelProductDescCult"}
-            // };
-            // *******************
-
-            // setup config object for SqlToCb
-            var config = new SqlToCbConfig
-            {
-                SourceSqlConnectionString = "Server=localhost;Database=AdventureWorks2016;Trusted_Connection=True;",
-                TargetBucket = "AdventureWorks2016",
-                TargetBucketRamQuotaMB = 1024,
-                TargetConnectionString = "couchbase://localhost",
-                TargetPassword = "password",
-                TargetUsername = "Administrator",
-                TableNameToCollectionMapping = tableNameToCollectionMapping,
-                UseSchemaForScope = false,
-                UseDefaultScopeForDboSchema = true,
-                DefaultPasswordForUsers = "Change*This*Password*123"
+                SourceSqlConnectionString = config.GetValue<string>("SqlServer:ConnectionString"),
+                TargetBucket = config.GetValue<string>("CouchbaseServer:Bucket"),
+                TargetBucketRamQuotaMB = config.GetValue<int>("CouchbaseServer:TargetBucketRamQuotaMB"),
+                TargetConnectionString = config.GetValue<string>("CouchbaseServer:ConnectionString"),
+                TargetUsername = config.GetValue<string>("CouchbaseServer:Username"),
+                TargetPassword = config.GetValue<string>("CouchbaseServer:Password"),
+                TableNameToCollectionMapping = tableNameCollectionMapping,
+                UseSchemaForScope = config.GetValue<bool>("CouchbaseServer:UseSchemaForScope"),
+                UseDefaultScopeForDboSchema = config.GetValue<bool>("CouchbaseServer:UseDefaultScopeForDboSchema"),
+                DefaultPasswordForUsers = config.GetValue<string>("CouchbaseServer:DefaultPasswordForUsers")
             };
 
             // setup DI for logging/HTTP
@@ -76,7 +42,7 @@ namespace SqlServerToCouchbase.Console
                     .AddFilter(level => level >= LogLevel.Information)
                 )
                 .AddHttpClient()
-                .AddSingleton<SqlToCbConfig>(config)
+                .AddSingleton<SqlToCbConfig>(migrateConfig)
                 .AddTransient<SqlToCb>()
                 .BuildServiceProvider();
 
@@ -89,34 +55,35 @@ namespace SqlServerToCouchbase.Console
 
             try
             {
+                // instructions for migration run
+                var shouldValidateNames = config.GetValue<bool?>("Instructions:ValidateNames") ?? false;
+                var shouldCreateBucket = config.GetValue<bool?>("Instructions:CreateBucket") ?? false;
+                var shouldCreateCollections = config.GetValue<bool?>("Instructions:CreateCollections") ?? false;
+                var shouldCreateUsers = config.GetValue<bool?>("Instructions:CreateUsers") ?? false;
+                var shouldCreateIndexes = config.GetValue<bool?>("Instructions:CreateIndexes") ?? false;
+                var shouldSampleIndexes = config.GetValue<bool?>("Sampling:SampleIndexes") ?? false;
+                var shouldCreateData = config.GetValue<bool?>("Instructions:CreateData") ?? false;
+                var shouldSampleData = config.GetValue<bool?>("Sampling:SampleData") ?? false;
+
                 await convert.ConnectAsync();
 
-                await convert.MigrateAsync(validateNames: true);
+                if (shouldValidateNames)
+                    await convert.MigrateAsync(validateNames: true);
 
-                await convert.MigrateAsync(createBucket: true);
+                if(shouldCreateBucket)
+                    await convert.MigrateAsync(createBucket: true);
                 
-                System.Console.WriteLine("Bucket has been created. Press ENTER to continue.");
-                System.Console.ReadLine();
-                 
-                await convert.MigrateAsync(createCollections: true);
+                if(shouldCreateCollections)
+                    await convert.MigrateAsync(createCollections: true);
 
-                System.Console.WriteLine("Collections have been created. Press ENTER to continue.");
-                System.Console.ReadLine();
+                if(shouldCreateUsers)
+                    await convert.MigrateAsync(createUsers: true);
 
-                await convert.MigrateAsync(createUsers: true);
+                if(shouldCreateIndexes)
+                    await convert.MigrateAsync(createIndexes: true, sampleForDemo: shouldSampleIndexes);
 
-                System.Console.WriteLine("Users have been created. Press ENTER to continue.");
-                System.Console.ReadLine();
-
-                await convert.MigrateAsync(createIndexes: true, sampleForDemo: true);
-
-                System.Console.WriteLine("Indexes have been created. Press ENTER to continue.");
-                System.Console.ReadLine();
-
-                 await convert.MigrateAsync(copyData: true, sampleForDemo: true);
-
-                System.Console.WriteLine("Data has been copied. Press ENTER to continue.");
-                System.Console.ReadLine();
+                if(shouldCreateData)
+                    await convert.MigrateAsync(copyData: true, sampleForDemo: shouldSampleData);
             }
             finally
             {
