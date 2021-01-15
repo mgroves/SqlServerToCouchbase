@@ -36,7 +36,7 @@ namespace SqlServerToCouchbase
             _isValid = false;
         }
 
-        public async Task Connect()
+        public async Task ConnectAsync()
         {
             _logger.LogInformation("Connecting to SQL Server...");
             _sqlConnection = new SqlConnection(_config.SourceSqlConnectionString);
@@ -82,7 +82,7 @@ namespace SqlServerToCouchbase
             }
         }
 
-        private async Task ValidateNames()
+        private async Task ValidateNamesAsync()
         {
             var tables = (await _sqlConnection.QueryAsync(@"
                 select TABLE_SCHEMA, TABLE_NAME
@@ -117,7 +117,7 @@ namespace SqlServerToCouchbase
         /// <param name="sampleForDemo">Only create a sample set of Couchbase documents/indexes - only suitable for demos!</param>
         /// <param name="createUsers">Create Couchbase users to match the SQL users</param>
         /// <returns></returns>
-        public async Task Migrate(
+        public async Task MigrateAsync(
             bool validateNames = false,
             bool createBucket = false,
             bool createCollections = false,
@@ -126,7 +126,7 @@ namespace SqlServerToCouchbase
             bool sampleForDemo = false,
             bool createUsers = false)
         {
-            if (validateNames) await ValidateNames();
+            if (validateNames) await ValidateNamesAsync();
 
             var shouldContinue = createBucket || createCollections || createIndexes || copyData || createUsers;
 
@@ -137,20 +137,20 @@ namespace SqlServerToCouchbase
                 throw new Exception("Validation on SQL Server names has not been performed. Cannot continue with migration.");
 
             if (createBucket)
-                await CreateBucket();
+                await CreateBucketAsync();
             else
-                await ConnectBucket();
+                await ConnectBucketAsync();
 
-            if (createCollections) await CreateCollections();
+            if (createCollections) await CreateCollectionsAsync();
 
-            if (createIndexes) await CreateIndexes(sampleForDemo);
+            if (createIndexes) await CreateIndexesAsync(sampleForDemo);
 
-            if (copyData) await CopyData(sampleForDemo);
+            if (copyData) await CopyDataAsync(sampleForDemo);
 
-            if (createUsers) await CreateUsers();
+            if (createUsers) await CreateUsersAsync();
         }
 
-        private async Task CreateUsers()
+        private async Task CreateUsersAsync()
         {
             var userManager = _cluster.Users;
 
@@ -225,7 +225,7 @@ SELECT p.permission_name, SCHEMA_NAME(t.schema_id) AS SchemaName, OBJECT_NAME(p.
             }
         }
 
-        private async Task CreateBucket()
+        private async Task CreateBucketAsync()
         {
             var bucketManager = _cluster.Buckets;
             var bucketSettings = new BucketSettings
@@ -244,17 +244,19 @@ SELECT p.permission_name, SCHEMA_NAME(t.schema_id) AS SchemaName, OBJECT_NAME(p.
             {
                 _logger.LogInformation("already exists.");
             }
+
             _bucket = await _cluster.BucketAsync(_config.TargetBucket);
+            await _bucket.WaitUntilReadyAsync(TimeSpan.FromSeconds(30));
 
             _collManager = _bucket.Collections;
         }
 
-        private async Task ConnectBucket()
+        private async Task ConnectBucketAsync()
         {
             _bucket = await _cluster.BucketAsync(_config.TargetBucket);
         }
 
-        private async Task CreateCollections()
+        private async Task CreateCollectionsAsync()
         {
             var tables = (await _sqlConnection.QueryAsync(@"
                 select TABLE_SCHEMA, TABLE_NAME
@@ -267,9 +269,9 @@ SELECT p.permission_name, SCHEMA_NAME(t.schema_id) AS SchemaName, OBJECT_NAME(p.
 
                 _logger.LogInformation($"Creating collection `{collectionName}`...");
 
-                await CreateScopeIfNecessary(scopeName);
+                await CreateScopeIfNecessaryAsync(scopeName);
 
-                if (await CollectionExists(collectionName, scopeName))
+                if (await CollectionExistsAsync(collectionName, scopeName))
                 {
                     _logger.LogInformation("already exists.");
                     continue;
@@ -289,7 +291,7 @@ SELECT p.permission_name, SCHEMA_NAME(t.schema_id) AS SchemaName, OBJECT_NAME(p.
             }
         }
 
-        private async Task CreateScopeIfNecessary(string scopeName)
+        private async Task CreateScopeIfNecessaryAsync(string scopeName)
         {
             try
             {
@@ -344,7 +346,7 @@ SELECT p.permission_name, SCHEMA_NAME(t.schema_id) AS SchemaName, OBJECT_NAME(p.
             return collectionName;
         }
 
-        private async Task<bool> CollectionExists(string collectionName, string scopeName)
+        private async Task<bool> CollectionExistsAsync(string collectionName, string scopeName)
         {
             try
             {
@@ -367,7 +369,7 @@ SELECT p.permission_name, SCHEMA_NAME(t.schema_id) AS SchemaName, OBJECT_NAME(p.
             }
         }
 
-        private async Task CreateIndexes(bool sampleForDemo = false)
+        private async Task CreateIndexesAsync(bool sampleForDemo = false)
         {
             _logger.LogInformation("Creating indexes...");
             var indexes = (await _sqlConnection.QueryAsync(@"
@@ -420,7 +422,7 @@ SELECT p.permission_name, SCHEMA_NAME(t.schema_id) AS SchemaName, OBJECT_NAME(p.
             }
         }
 
-        private async Task CopyData(bool sampleData = false)
+        private async Task CopyDataAsync(bool sampleData = false)
         {
             _primaryKeyNames = new Dictionary<string, List<string>>();
 
@@ -430,11 +432,17 @@ SELECT p.permission_name, SCHEMA_NAME(t.schema_id) AS SchemaName, OBJECT_NAME(p.
                 where t.temporal_type_desc IN ('SYSTEM_VERSIONED_TEMPORAL_TABLE', 'NON_TEMPORAL_TABLE')
             ")).ToList();
 
+            // *** refresh to attempt to deal with NCBC-2784
+            Dispose();
+            await ConnectAsync();
+            await CreateBucketAsync();
+            // ****
+
             foreach (var table in tables)
-                await CopyDataFromTableToCollection(table.TABLE_SCHEMA, table.TABLE_NAME, sampleData);
+                await CopyDataFromTableToCollectionAsync(table.TABLE_SCHEMA, table.TABLE_NAME, sampleData);
         }
 
-        private async Task CopyDataFromTableToCollection(string tableSchema, string tableName, bool sampleData = false)
+        private async Task CopyDataFromTableToCollectionAsync(string tableSchema, string tableName, bool sampleData = false)
         {
             var collectionName = GetCollectionName(tableSchema,tableName);
 
@@ -450,7 +458,9 @@ SELECT p.permission_name, SCHEMA_NAME(t.schema_id) AS SchemaName, OBJECT_NAME(p.
             }
             else
             {
-                collection = _bucket.Collection(collectionName);
+                // possible bug here: NCBC-2784
+                var scope = _bucket.DefaultScope();
+                collection = scope.Collection(collectionName);
             }
             var rows = _sqlConnection.Query($@"
                 SELECT {(sampleData ? "TOP 100" : "")} *
@@ -462,7 +472,7 @@ SELECT p.permission_name, SCHEMA_NAME(t.schema_id) AS SchemaName, OBJECT_NAME(p.
                 string documentKey = null;
                 try
                 {
-                    documentKey = await GetDocumentKeyFromPrimaryKeyValues(row, tableSchema, tableName);
+                    documentKey = await GetDocumentKeyFromPrimaryKeyValuesAsync(row, tableSchema, tableName);
                     await collection.UpsertAsync(documentKey, row);
                 }
                 catch(Exception ex)
@@ -480,7 +490,7 @@ SELECT p.permission_name, SCHEMA_NAME(t.schema_id) AS SchemaName, OBJECT_NAME(p.
             _logger.LogInformation("Done");
         }
 
-        private async Task<string> GetDocumentKeyFromPrimaryKeyValues(dynamic row, string tableSchema, string tableName)
+        private async Task<string> GetDocumentKeyFromPrimaryKeyValuesAsync(dynamic row, string tableSchema, string tableName)
         {
             // check to see if the key name are already cached
             if (!_primaryKeyNames.ContainsKey($"{tableSchema}.{tableName}"))

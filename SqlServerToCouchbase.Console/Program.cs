@@ -36,22 +36,22 @@ namespace SqlServerToCouchbase.Console
             // *******************
             // AdventureWorks
             // UseSchemaForScope = false
-            // var tableNameToCollectionMapping = new Dictionary<string, string>
-            // {
-            //     {"Production_ProductListPriceHistory", "Production_ProductListPrHist"},
-            //     {"Production_ProductModelIllustration", "Production_ProductModelIllus"},
-            //     {"Production_ProductModelProductDescriptionCulture", "Production_ProdMoProdDesCult"},
-            //     {"Production_TransactionHistoryArchive", "Production_TransactHisArch"},
-            //     {"HumanResources_EmployeeDepartmentHistory", "HumanResources_EmpDeptHist"},
-            //     {"HumanResources_EmployeePayHistory", "HumanResources_EmpPayHistory"},
-            //     {"Sales_SalesOrderHeaderSalesReason", "Sales_SalesOrderHeadSalRea"}
-            // };
-
-            // UseSchemaForScope = true
             var tableNameToCollectionMapping = new Dictionary<string, string>
             {
-                {"ProductModelProductDescriptionCulture", "ProductModelProductDescCult"}
+                {"Production_ProductListPriceHistory", "Production_ProductListPrHist"},
+                {"Production_ProductModelIllustration", "Production_ProductModelIllus"},
+                {"Production_ProductModelProductDescriptionCulture", "Production_ProdMoProdDesCult"},
+                {"Production_TransactionHistoryArchive", "Production_TransactHisArch"},
+                {"HumanResources_EmployeeDepartmentHistory", "HumanResources_EmpDeptHist"},
+                {"HumanResources_EmployeePayHistory", "HumanResources_EmpPayHistory"},
+                {"Sales_SalesOrderHeaderSalesReason", "Sales_SalesOrderHeadSalRea"}
             };
+
+            // UseSchemaForScope = true
+            // var tableNameToCollectionMapping = new Dictionary<string, string>
+            // {
+            //     {"ProductModelProductDescriptionCulture", "ProductModelProductDescCult"}
+            // };
             // *******************
 
             // setup config object for SqlToCb
@@ -64,7 +64,7 @@ namespace SqlServerToCouchbase.Console
                 TargetPassword = "password",
                 TargetUsername = "Administrator",
                 TableNameToCollectionMapping = tableNameToCollectionMapping,
-                UseSchemaForScope = true,
+                UseSchemaForScope = false,
                 UseDefaultScopeForDboSchema = true,
                 DefaultPasswordForUsers = "Change*This*Password*123"
             };
@@ -89,31 +89,31 @@ namespace SqlServerToCouchbase.Console
 
             try
             {
-                await convert.Connect();
+                await convert.ConnectAsync();
 
-                await convert.Migrate(validateNames: true);
+                await convert.MigrateAsync(validateNames: true);
 
-                await convert.Migrate(createBucket: true);
+                await convert.MigrateAsync(createBucket: true);
                 
                 System.Console.WriteLine("Bucket has been created. Press ENTER to continue.");
                 System.Console.ReadLine();
                  
-                await convert.Migrate(createCollections: true);
+                await convert.MigrateAsync(createCollections: true);
 
                 System.Console.WriteLine("Collections have been created. Press ENTER to continue.");
                 System.Console.ReadLine();
 
-                await convert.Migrate(createUsers: true);
+                await convert.MigrateAsync(createUsers: true);
 
                 System.Console.WriteLine("Users have been created. Press ENTER to continue.");
                 System.Console.ReadLine();
 
-                await convert.Migrate(createIndexes: true, sampleForDemo: true);
+                await convert.MigrateAsync(createIndexes: true, sampleForDemo: true);
 
                 System.Console.WriteLine("Indexes have been created. Press ENTER to continue.");
                 System.Console.ReadLine();
 
-                await convert.Migrate(copyData: true, sampleForDemo: true);
+                 await convert.MigrateAsync(copyData: true, sampleForDemo: true);
 
                 System.Console.WriteLine("Data has been copied. Press ENTER to continue.");
                 System.Console.ReadLine();
