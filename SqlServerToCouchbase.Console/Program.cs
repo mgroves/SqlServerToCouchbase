@@ -30,9 +30,9 @@ namespace SqlServerToCouchbase.Console
                 TargetUsername = config.GetValue<string>("CouchbaseServer:Username"),
                 TargetPassword = config.GetValue<string>("CouchbaseServer:Password"),
                 TableNameToCollectionMapping = tableNameCollectionMapping,
-                UseSchemaForScope = config.GetValue<bool>("CouchbaseServer:UseSchemaForScope"),
-                UseDefaultScopeForDboSchema = config.GetValue<bool>("CouchbaseServer:UseDefaultScopeForDboSchema"),
-                DefaultPasswordForUsers = config.GetValue<string>("CouchbaseServer:DefaultPasswordForUsers")
+                UseSchemaForScope = config.GetValue<bool>("UseSchemaForScope"),
+                UseDefaultScopeForDboSchema = config.GetValue<bool>("UseDefaultScopeForDboSchema"),
+                DefaultPasswordForUsers = config.GetValue<string>("CouchbaseServer:DefaultUserPassword")
             };
 
             // setup DI for logging/HTTP
