@@ -119,6 +119,7 @@ namespace SqlServerToCouchbase
         /// <param name="copyData">Create Couchbase documents to match the SQL rows</param>
         /// <param name="sampleForDemo">Only create a sample set of Couchbase documents/indexes - only suitable for demos!</param>
         /// <param name="createUsers">Create Couchbase users to match the SQL users</param>
+        /// <param name="pipelines">Pipelines mapped to tables to perform filters/transforms</param>
         /// <returns></returns>
         public async Task MigrateAsync(
             bool validateNames = false,
@@ -127,7 +128,8 @@ namespace SqlServerToCouchbase
             bool createIndexes = false,
             bool copyData = false,
             bool sampleForDemo = false,
-            bool createUsers = false)
+            bool createUsers = false,
+            SqlPipelines pipelines = null)
         {
             if (validateNames) await ValidateNamesAsync();
 
@@ -148,7 +150,7 @@ namespace SqlServerToCouchbase
 
             if (createIndexes) await CreateIndexesAsync(sampleForDemo);
 
-            if (copyData) await CopyDataAsync(sampleForDemo);
+            if (copyData) await CopyDataAsync(sampleForDemo, pipelines);
 
             if (createUsers) await CreateUsersAsync();
         }
@@ -435,7 +437,7 @@ SELECT p.permission_name, SCHEMA_NAME(t.schema_id) AS SchemaName, OBJECT_NAME(p.
             _logger.LogInformation("Index creation complete.");
         }
 
-        private async Task CopyDataAsync(bool sampleData = false)
+        private async Task CopyDataAsync(bool sampleData = false, SqlPipelines pipelines = null)
         {
             _logger.LogInformation("Copying data started...");
             _primaryKeyNames = new Dictionary<string, List<string>>();
@@ -453,12 +455,12 @@ SELECT p.permission_name, SCHEMA_NAME(t.schema_id) AS SchemaName, OBJECT_NAME(p.
             // ****
 
             foreach (var table in tables)
-                await CopyDataFromTableToCollectionAsync(table.TABLE_SCHEMA, table.TABLE_NAME, sampleData);
+                await CopyDataFromTableToCollectionAsync(table.TABLE_SCHEMA, table.TABLE_NAME, sampleData, pipelines);
 
             _logger.LogInformation("Copying data complete.");
         }
 
-        private async Task CopyDataFromTableToCollectionAsync(string tableSchema, string tableName, bool sampleData = false)
+        private async Task CopyDataFromTableToCollectionAsync(string tableSchema, string tableName, bool sampleData = false, SqlPipelines pipelines = null)
         {
             var collectionName = GetCollectionName(tableSchema,tableName);
 
@@ -477,23 +479,37 @@ SELECT p.permission_name, SCHEMA_NAME(t.schema_id) AS SchemaName, OBJECT_NAME(p.
                 var scope = _bucket.DefaultScope();
                 collection = scope.Collection(collectionName);
             }
-            var rows = _sqlConnection.Query($@"
-                SELECT {(sampleData ? "TOP 100" : "")} *
-                FROM [{tableSchema}].[{tableName}]");
+
+            // lookup and use custom pipeline defined for this table
+            SqlPipelineBase pipeline = new SqlPipelineDefault(tableSchema, tableName);
+            if (sampleData)
+                pipeline = new SqlPipelineDefaultSample(tableSchema, tableName);
+            var customPipeline = pipelines?.Get(tableSchema, tableName);
+            if (customPipeline != null)
+                pipeline = customPipeline;
+
+            // buffered false because this could be a very large amount of data
+            // see: https://dapper-tutorial.net/buffered
+            var rows = _sqlConnection.Query(pipeline.Query, buffered: false);
 
             _logger.LogInformation("Writing row(s)...");
             foreach (var row in rows)
             {
+                if (!pipeline.IsIncluded(row))
+                    continue;
+
+                var transformedRow = pipeline.Transform(row);
+
                 string documentKey = null;
                 try
                 {
-                    documentKey = await GetDocumentKeyFromPrimaryKeyValuesAsync(row, tableSchema, tableName);
-                    await collection.UpsertAsync(documentKey, row);
+                    documentKey = await GetDocumentKeyFromPrimaryKeyValuesAsync(transformedRow, tableSchema, tableName);
+                    await collection.UpsertAsync(documentKey, transformedRow);
                 }
                 catch(Exception ex)
                 {
                     _logger.LogError($"Error writing.");
-                    _logger.LogError($"Row data: {row}");
+                    _logger.LogError($"Row data: {transformedRow}");
                     _logger.LogError($"Document key: {documentKey}");
                     _logger.LogError($"Exception message: {ex.Message}");
                     _logger.LogError($"Exception stack trace: {ex.StackTrace}");

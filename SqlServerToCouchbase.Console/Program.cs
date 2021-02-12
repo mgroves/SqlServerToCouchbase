@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Configuration;
@@ -65,6 +66,9 @@ namespace SqlServerToCouchbase.Console
                 var shouldCreateData = config.GetValue<bool?>("Instructions:CreateData") ?? false;
                 var shouldSampleData = config.GetValue<bool?>("Sampling:SampleData") ?? false;
 
+                var pipelines = new SqlPipelines();
+                pipelines.Add(new ModifiedDateSqlFilter(new DateTime(2014, 05, 27), "Person", "Address"));
+
                 await convert.ConnectAsync();
 
                 if (shouldValidateNames)
@@ -83,7 +87,7 @@ namespace SqlServerToCouchbase.Console
                     await convert.MigrateAsync(createIndexes: true, sampleForDemo: shouldSampleIndexes);
 
                 if(shouldCreateData)
-                    await convert.MigrateAsync(copyData: true, sampleForDemo: shouldSampleData);
+                    await convert.MigrateAsync(copyData: true, sampleForDemo: shouldSampleData, pipelines: pipelines);
             }
             finally
             {
