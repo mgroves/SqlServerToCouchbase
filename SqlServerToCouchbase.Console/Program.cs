@@ -87,7 +87,7 @@ namespace SqlServerToCouchbase.Console
                     await convert.MigrateAsync(createIndexes: true, sampleForDemo: shouldSampleIndexes);
 
                 if(shouldCreateData)
-                    await convert.MigrateAsync(copyData: true, sampleForDemo: shouldSampleData, pipelines: pipelines);
+                    await convert.MigrateAsync(copyData: true, sampleForDemo: shouldSampleData); //, pipelines: pipelines);
             }
             finally
             {
