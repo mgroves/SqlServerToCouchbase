@@ -490,7 +490,7 @@ SELECT p.permission_name, SCHEMA_NAME(t.schema_id) AS SchemaName, OBJECT_NAME(p.
 
             // buffered false because this could be a very large amount of data
             // see: https://dapper-tutorial.net/buffered
-            var rows = _sqlConnection.Query(pipeline.Query, buffered: false);
+            var rows = _sqlConnection.Query(pipeline.Query); // TODO: use 'buffered: false' here, which means I need a separate reader inside the loop
 
             _logger.LogInformation("Writing row(s)...");
             foreach (var row in rows)
