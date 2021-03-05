@@ -311,14 +311,12 @@ SELECT p.permission_name, SCHEMA_NAME(t.schema_id) AS SchemaName, OBJECT_NAME(p.
                 var scopes = await _bucket.Collections.GetAllScopesAsync();
                 if (scopes.Any(s => s.Name == scopeName))
                     return;
-                var spec = new ScopeSpec(scopeName);
-                await _collManager.CreateScopeAsync(spec);
-
-                //_bucket.Scope(scopeName);
+                await _collManager.CreateScopeAsync(scopeName);
             }
-            catch (Exception)
+            catch (Exception ex)
             {
-                _logger.LogInformation($"Problem creating or checking Scope `{scopeName}`...");
+                _logger.LogError(ex, $"Problem creating or checking Scope `{scopeName}`...");
+                throw;
             }
             
             _logger.LogInformation($"Done");
@@ -471,13 +469,13 @@ SELECT p.permission_name, SCHEMA_NAME(t.schema_id) AS SchemaName, OBJECT_NAME(p.
             if (_config.UseSchemaForScope)
             {
                 var scopeName = GetScopeName(tableSchema);
-                var scope = _bucket.Scope(scopeName);
-                collection = scope.Collection(collectionName);
+                var scope = await _bucket.ScopeAsync(scopeName);
+                collection = await scope.CollectionAsync(collectionName);
             }
             else
             {
-                var scope = _bucket.DefaultScope();
-                collection = scope.Collection(collectionName);
+                var scope = await _bucket.DefaultScopeAsync();
+                collection = await scope.CollectionAsync(collectionName);
             }
 
             // lookup and use custom pipeline defined for this table
@@ -490,34 +488,40 @@ SELECT p.permission_name, SCHEMA_NAME(t.schema_id) AS SchemaName, OBJECT_NAME(p.
 
             // buffered false because this could be a very large amount of data
             // see: https://dapper-tutorial.net/buffered
-            var rows = _sqlConnection.Query(pipeline.Query); // TODO: use 'buffered: false' here, which means I need a separate reader inside the loop
-
-            _logger.LogInformation("Writing row(s)...");
-            foreach (var row in rows)
+            using (var outerConnection = new SqlConnection(_config.SourceSqlConnectionString))
             {
-                if (!pipeline.IsIncluded(row))
-                    continue;
+                _logger.LogInformation($"Opening non-buffered connection to `{tableSchema}.{tableName}`");
+                var rows = outerConnection.Query(pipeline.Query, buffered: false);
 
-                var transformedRow = pipeline.Transform(row);
+                _logger.LogInformation("Writing row(s)...");
+                foreach (var row in rows)
+                {
+                    if (!pipeline.IsIncluded(row))
+                        continue;
 
-                string documentKey = null;
-                try
-                {
-                    documentKey = await GetDocumentKeyFromPrimaryKeyValuesAsync(transformedRow, tableSchema, tableName);
-                    await collection.UpsertAsync(documentKey, transformedRow);
+                    var transformedRow = pipeline.Transform(row);
+
+                    string documentKey = null;
+                    try
+                    {
+                        documentKey = await GetDocumentKeyFromPrimaryKeyValuesAsync(transformedRow, tableSchema, tableName);
+                        await collection.UpsertAsync(documentKey, transformedRow);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError($"Error writing.");
+                        _logger.LogError($"Row data: {transformedRow}");
+                        _logger.LogError($"Document key: {documentKey}");
+                        _logger.LogError($"Exception message: {ex.Message}");
+                        _logger.LogError($"Exception stack trace: {ex.StackTrace}");
+                    }
+
+                    counter++;
+                    if ((counter % 1000) == 0)
+                        _logger.LogInformation(counter + "...");
                 }
-                catch(Exception ex)
-                {
-                    _logger.LogError($"Error writing.");
-                    _logger.LogError($"Row data: {transformedRow}");
-                    _logger.LogError($"Document key: {documentKey}");
-                    _logger.LogError($"Exception message: {ex.Message}");
-                    _logger.LogError($"Exception stack trace: {ex.StackTrace}");
-                }
-                counter++;
-                if ((counter % 1000) == 0)
-                    _logger.LogInformation(counter + "...");
             }
+            _logger.LogInformation($"Closing non-buffered connection to `{tableSchema}.{tableName}`");
             _logger.LogInformation("Done");
         }
 
