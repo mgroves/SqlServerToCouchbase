@@ -44,7 +44,7 @@ SQL Server: `CREATE INDEX [AK_Person_rowguid] ON [Person].[Person] ([rowguid])`
 
 becomes
 
-Couchbase: `CREATE INDEX AK_Person_rowguid ON Person_Person(rowguid)`
+Couchbase: `CREATE INDEX sql_AK_Person_rowguid ON Person_Person(rowguid)`
 
 Before using these indexes blindly, I strongly recommend trying your query in Couchbase Server Query Workbench to see if there's a better way to write it and/or to see if Couchbase advises creating a different index.
 
@@ -67,7 +67,7 @@ key: 77
 { Id: 77, Name: 'Emma R', ShoeSize: 6}
 ```
 
-Notice that Id remains intact in the document body. This is to ease the transition, but in the long run it may not be a good idea to keep this "duplicated" data that's already part of the document key.
+Notice that Id remains intact in the document body. This is to ease the transition, but in the long run it may not be a good idea to keep this "duplicated" data that's already in the document key.
 
 If the primary key in the SQL Server table is a compound key, the values will be combined into a single document key in Couchbase, separated by "::".
 
@@ -105,6 +105,39 @@ DELETE | Query Delete, Data Writer
 If the user doesn't have any specific permissions, it will give that user Bucket Admin access (which gives the user unlimited access to all features of the bucket).
 
 For complex auth scenarios, users are an area that require a manual audit; user migration is definitely intended as a learning tool only.
+
+## Filters/Transform Pipelines
+
+By default, _all_ data is copied over _as is_ from SQL Server to Couchbase.
+
+You can add "pipelines" to your migration if you want to filter and/or transform data that's being copied over.
+
+_Filter_: Logic to decide whether or not to include a given piece of data. E.g. "only copy a row of data if 'createDate' is later than '2020-08-18'".
+
+_Transform_: How to change data as its being copied. E.g. "when copying a row of data, change the state value from the 2-letter abbreviation 'OH' to the full state name 'Ohio'"
+
+To create a filter and/or transform, create a class that inherits from SqlPipelineBase. You can override one or more of the methods to add filtering/transforming behavior:
+
+* **Query**: The query that will pull the data from SQL Server. By default, this is `SELECT * FROM [SchemaName].[TableName]`, but you can override it. By using a query with more specificity than `SELECT *`, you can transform the data. By using a query with `WHERE`, you can filter the data.
+
+* **IsIncluded**: When overriding this method for filtering, you can supply logic that returns true to include the data, or false to exclude the data.
+
+* **Transform**: When overriding this method for transforming, you can supply logic that transforms the given piece of data and return whatever you'd like.
+
+Once you've created your class, instatiate it and associate it with a schema+table. See **SamplePipelines.cs** for some examples of pipeline classes. Create a `SqlPipelines` object and add your filters to it. Then give that pipelines object to the `Migrate` method.
+
+```
+var pipelines = new SqlPipelines();
+pipelines.Add(new ModifiedDateSqlFilter(new DateTime(2014, 05, 27), "Person", "Address"));
+
+// ... snip ...
+
+await convert.MigrateAsync(copyData: true, pipelines: pipelines);
+```
+
+You may only add one filter/transform object per SQL Server table.
+
+_Why override `IsIncluded` or `Transform` instead of overriding `Query`? Isn't changing the query going to be more efficient?_ Yes, giving a custom SQL query is going to be the most efficient way to filter/transform. However, if you have complex logic better expressed in C# and/or have need to call out to services that SQL Server doesn't have access to, you can use these functions instead.
 
 ## Known limitations:
 
