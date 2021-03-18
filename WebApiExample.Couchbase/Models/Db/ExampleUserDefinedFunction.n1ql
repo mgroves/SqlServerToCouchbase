@@ -1,0 +1,28 @@
+﻿-- Example query from https://www.essentialsql.com/adventure-works-bill-materials-subqueries/
+-- created as a sproc with price range parameters
+-- Make sure to create this sproc in your AdventureWorks SQL Server database
+-- before using GET /getListSubcomponents/{listPriceMin}/{listPriceMax}
+
+CREATE INDEX sql_DiscontinuedDate_SellEndDate_ListPrice
+	ON `default`:`AdventureWorks2016`.`Production`.`Product`(`DiscontinuedDate`,`SellEndDate`,`ListPrice`);
+
+CREATE INDEX sql_ComponentID
+	ON `default`:`AdventureWorks2016`.`Production`.`BillOfMaterials`(`ComponentID`);
+
+CREATE OR REPLACE FUNCTION ListSubcomponents(vListPriceMin, vListPriceMax) { (
+
+	SELECT P.ProductID,
+		   P.Name,
+		   P.ProductNumber,
+		   P.FinishedGoodsFlag,
+		   P.ListPrice
+	FROM   AdventureWorks2016.Production.Product P
+	WHERE  P.SellEndDate is NULL
+		   AND P.DiscontinuedDate is NULL
+		   AND EXISTS (SELECT 1
+					   FROM  AdventureWorks2016.Production.BillOfMaterials BOM
+					   WHERE P.ProductID = BOM.ComponentID
+					  )
+			AND P.ListPrice >= vListPriceMin
+			AND P.ListPrice <= vListPriceMax
+) };
