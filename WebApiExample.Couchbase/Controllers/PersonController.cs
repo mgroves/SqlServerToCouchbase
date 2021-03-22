@@ -30,8 +30,9 @@ namespace WebApiExample.Couchbase.Controllers
             var cluster = bucket.Cluster;
 
             var personPage = await cluster.QueryAsync<Person>($@"
-                SELECT p.BusinessEntityID, p.FirstName, p.LastName
+                SELECT p.LastName, p.BusinessEntityID, p.FirstName
                 FROM `{bucketName}`.Person.Person p
+                WHERE p.LastName IS NOT MISSING
                 ORDER BY p.LastName
                 LIMIT {pageSize} OFFSET {(pageNum * pageSize)}
             ");

@@ -3,7 +3,7 @@
 -- will need to be created
 
 -- this index is used by GetPersonsPageAsync API
-CREATE PRIMARY INDEX ON `AdventureWorks2016`.`Person`.`Person`
+CREATE INDEX `ix_getPersonsPage` ON `AdventureWorks2016`.`Person`.`Person`(`LastName`);
 
 -- these indexes are used by the ListSubcomponents user-defined function (UDF)
 CREATE INDEX sql_DiscontinuedDate_SellEndDate_ListPrice
