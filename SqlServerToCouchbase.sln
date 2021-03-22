@@ -14,6 +14,10 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution 
 EndProject
 Project("{E53339B2-1760-4266-BCC7-CA923CBCF16C}") = "docker-compose", "docker-compose.dcproj", "{88B6E614-4D69-46C9-96AF-F677C305BCC6}"
 EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "WebApiExample.SqlServer", "WebApiExample.SqlServer\WebApiExample.SqlServer.csproj", "{16669C7B-6C81-479A-B26F-5C79AF11EDC0}"
+EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "WebApiExample.Couchbase", "WebApiExample.Couchbase\WebApiExample.Couchbase.csproj", "{FADFA134-0774-4978-9CD4-ED858294612C}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -32,6 +36,14 @@ Global
 		{88B6E614-4D69-46C9-96AF-F677C305BCC6}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{88B6E614-4D69-46C9-96AF-F677C305BCC6}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{88B6E614-4D69-46C9-96AF-F677C305BCC6}.Release|Any CPU.Build.0 = Release|Any CPU
+		{16669C7B-6C81-479A-B26F-5C79AF11EDC0}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{16669C7B-6C81-479A-B26F-5C79AF11EDC0}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{16669C7B-6C81-479A-B26F-5C79AF11EDC0}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{16669C7B-6C81-479A-B26F-5C79AF11EDC0}.Release|Any CPU.Build.0 = Release|Any CPU
+		{FADFA134-0774-4978-9CD4-ED858294612C}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{FADFA134-0774-4978-9CD4-ED858294612C}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{FADFA134-0774-4978-9CD4-ED858294612C}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{FADFA134-0774-4978-9CD4-ED858294612C}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
