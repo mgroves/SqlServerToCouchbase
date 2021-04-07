@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Configuration;
@@ -42,7 +43,6 @@ namespace SqlServerToCouchbase.Console
                     .AddConsole()
                     .AddFilter(level => level >= LogLevel.Information)
                 )
-                .AddHttpClient()
                 .AddSingleton<SqlToCbConfig>(migrateConfig)
                 .AddTransient<SqlToCb>()
                 .BuildServiceProvider();
@@ -68,6 +68,10 @@ namespace SqlServerToCouchbase.Console
 
                 var pipelines = new SqlPipelines();
                 pipelines.Add(new ModifiedDateSqlFilter(new DateTime(2014, 05, 27), "Person", "Address"));
+                pipelines.Add(new ScrambleSensitivePipeline("Person", "Person", "FirstName", "LastName"));
+
+                var sw = new Stopwatch();
+                sw.Start();
 
                 await convert.ConnectAsync();
 
@@ -87,7 +91,12 @@ namespace SqlServerToCouchbase.Console
                     await convert.MigrateAsync(createIndexes: true, sampleForDemo: shouldSampleIndexes);
 
                 if(shouldCreateData)
-                    await convert.MigrateAsync(copyData: true, sampleForDemo: shouldSampleData); //, pipelines: pipelines);
+                    await convert.MigrateAsync(copyData: true, sampleForDemo: shouldSampleData, pipelines: pipelines);
+
+                sw.Stop();
+                System.Console.WriteLine("***************************");
+                System.Console.WriteLine($"Time elapsed: {sw.Elapsed}");
+                System.Console.WriteLine("***************************");
             }
             finally
             {

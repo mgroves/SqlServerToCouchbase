@@ -36,6 +36,14 @@ namespace SqlServerToCouchbase.Console
         private readonly string _schemaName;
         private readonly string _tableName;
 
+        /// <summary>
+        /// This pipeline will filter out (not copy over) any data
+        /// in the specified Schema.Table that has a ModifiedDate
+        /// >= the specified modifiedDate
+        /// </summary>
+        /// <param name="modifiedDate">Only include data >= this date</param>
+        /// <param name="schemaName">Schema name</param>
+        /// <param name="tableName">Table name</param>
         public ModifiedDateSqlFilter(DateTime modifiedDate, string schemaName, string tableName) : base(schemaName, tableName)
         {
             _modifiedDate = modifiedDate;
