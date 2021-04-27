@@ -18,6 +18,8 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "WebApiExample.SqlServer", "
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "WebApiExample.Couchbase", "WebApiExample.Couchbase\WebApiExample.Couchbase.csproj", "{FADFA134-0774-4978-9CD4-ED858294612C}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SqlServerToCouchbase.Tests", "SqlServerToCouchbase.Tests\SqlServerToCouchbase.Tests.csproj", "{0C92F688-FA2B-4CCE-B335-51D158BCE74C}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -44,6 +46,10 @@ Global
 		{FADFA134-0774-4978-9CD4-ED858294612C}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{FADFA134-0774-4978-9CD4-ED858294612C}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{FADFA134-0774-4978-9CD4-ED858294612C}.Release|Any CPU.Build.0 = Release|Any CPU
+		{0C92F688-FA2B-4CCE-B335-51D158BCE74C}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{0C92F688-FA2B-4CCE-B335-51D158BCE74C}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{0C92F688-FA2B-4CCE-B335-51D158BCE74C}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{0C92F688-FA2B-4CCE-B335-51D158BCE74C}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

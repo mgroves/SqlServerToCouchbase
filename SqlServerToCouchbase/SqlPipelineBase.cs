@@ -1,4 +1,7 @@
-﻿namespace SqlServerToCouchbase
+﻿using System.Runtime.CompilerServices;
+
+[assembly: InternalsVisibleTo("SqlServerToCouchbase.Tests")]
+namespace SqlServerToCouchbase
 {
     public abstract class SqlPipelineBase
     {

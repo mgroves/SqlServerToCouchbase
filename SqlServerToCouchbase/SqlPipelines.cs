@@ -3,6 +3,10 @@ using System.Collections.Generic;
 
 namespace SqlServerToCouchbase
 {
+    /// <summary>
+    /// All the transform/filter pipelines you want to use
+    /// on the migration
+    /// </summary>
     public class SqlPipelines
     {
         private readonly Dictionary<string, SqlPipelineBase> _pipelines;
@@ -12,6 +16,11 @@ namespace SqlServerToCouchbase
             _pipelines = new Dictionary<string, SqlPipelineBase>();
         }
 
+        /// <summary>
+        /// Add a pipeline. Each Schema.Table only supports one
+        /// pipeline max.
+        /// </summary>
+        /// <param name="pipeline"></param>
         public void Add(SqlPipelineBase pipeline)
         {
             var key = $"{pipeline.SchemaName}_{pipeline.TableName}";
@@ -21,6 +30,12 @@ namespace SqlServerToCouchbase
             _pipelines.Add(key, pipeline);
         }
 
+        /// <summary>
+        /// Get the pipeline for the given Schema.Table, if it exists.
+        /// </summary>
+        /// <param name="schemaName">Schema name</param>
+        /// <param name="tableName">Table name</param>
+        /// <returns>Returns a pipeline or null.</returns>
         public SqlPipelineBase Get(string schemaName, string tableName)
         {
             var key = $"{schemaName}_{tableName}";
