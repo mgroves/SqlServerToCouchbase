@@ -37,7 +37,7 @@ namespace SqlServerToCouchbase.Console
                 DefaultPasswordForUsers = config.GetValue<string>("CouchbaseServer:DefaultUserPassword")
             };
 
-            // setup DI for logging/HTTP
+            // setup DI for logging
             var serviceProvider = new ServiceCollection()
                 .AddLogging(builder => builder
                     .AddConsole()

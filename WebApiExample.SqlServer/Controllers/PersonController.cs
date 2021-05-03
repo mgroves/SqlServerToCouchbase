@@ -56,7 +56,6 @@ namespace WebApiExample.SqlServer.Controllers
         public async Task<IActionResult> GetPersonByIdExpandedAsync(int personId)
         {
             var person = await _context.Persons
-                //.Include(p => p.Addresses)
                 .Include(p => p.EmailAddresses)
                 .SingleOrDefaultAsync(p => p.BusinessEntityID == personId);
             

@@ -121,7 +121,7 @@ namespace WebApiExample.Couchbase.Controllers
             }
         }
 
-        // sproc example - see ExampleStoredProcedure.sql
+        // sproc example - see ExampleStoredProcedure.n1ql
         [HttpGet("/getListSubcomponents/{listPriceMin}/{listPriceMax}")]
         public async Task<IActionResult> GetListSubcomponents(decimal listPriceMin, decimal listPriceMax)
         {
