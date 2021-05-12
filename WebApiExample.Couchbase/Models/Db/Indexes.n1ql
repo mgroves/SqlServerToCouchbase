@@ -11,3 +11,8 @@ CREATE INDEX sql_DiscontinuedDate_SellEndDate_ListPrice
 
 CREATE INDEX sql_ComponentID
 	ON `default`:`AdventureWorks2016`.`Production`.`BillOfMaterials`(`ComponentID`);
+
+-- use these indexes when demoing, in case you don't want to wait for ALL adventureworks indexes to get copied over
+-- but note that when using sampleData, the corresponding EmailAddress might not have been copied over
+CREATE INDEX ix_Person_BusinessEntityID ON `AdventureWorks2016`.`Person`.`Person`(`BusinessEntityID`);
+CREATE INDEX ix_EmailAddress_BusinessEntityID ON `AdventureWorks2016`.`Person`.`EmailAddress`(`BusinessEntityID`);

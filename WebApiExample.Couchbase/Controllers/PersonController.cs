@@ -56,8 +56,9 @@ namespace WebApiExample.Couchbase.Controllers
         {
             var bucket = await _bucketProvider.GetBucketAsync();
             var cluster = bucket.Cluster;
-            var personResult = await cluster.QueryAsync<Person>(@"
-                SELECT p.* FROM AdventureWorks2016.Person.Person p WHERE p.BusinessEntityID = $personId",
+            var bucketName = bucket.Name;
+            var personResult = await cluster.QueryAsync<Person>($@"
+                SELECT p.* FROM `{bucketName}`.Person.Person p WHERE p.BusinessEntityID = $personId",
                 new QueryOptions().Parameter("personId", personId));
             return Ok(await personResult.Rows.SingleOrDefaultAsync());
         }
@@ -67,10 +68,11 @@ namespace WebApiExample.Couchbase.Controllers
         {
             var bucket = await _bucketProvider.GetBucketAsync();
             var cluster = bucket.Cluster;
-            var personResult = await cluster.QueryAsync<Person>(@"
+            var bucketName = bucket.Name;
+            var personResult = await cluster.QueryAsync<Person>($@"
                 SELECT p.*, EmailAddresses
-                FROM AdventureWorks2016.Person.Person p
-                NEST AdventureWorks2016.Person.EmailAddress EmailAddresses ON EmailAddresses.BusinessEntityID = p.BusinessEntityID
+                FROM `{bucketName}`.Person.Person p
+                LEFT NEST `{bucketName}`.Person.EmailAddress EmailAddresses ON EmailAddresses.BusinessEntityID = p.BusinessEntityID
                 WHERE p.BusinessEntityID = $personId",
                 new QueryOptions().Parameter("personId", personId));
             return Ok(await personResult.Rows.SingleOrDefaultAsync());
