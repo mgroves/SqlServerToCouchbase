@@ -2,6 +2,8 @@
 using System.Collections.Generic;
 using System.Data.SqlClient;
 using System.Linq;
+using System.Reflection;
+using System.Runtime.Loader;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using Couchbase;
@@ -15,6 +17,7 @@ using Couchbase.Management.Users;
 using Dapper;
 using Dynamitey;
 using Microsoft.Extensions.Logging;
+using Microsoft.SqlServer.Types;
 using Newtonsoft.Json;
 
 namespace SqlServerToCouchbase
@@ -35,6 +38,31 @@ namespace SqlServerToCouchbase
             _config = config;
             _logger = loggerFactory.CreateLogger<SqlToCb>();
             _isValid = false;
+
+            #region for use with dotMorten.Microsoft.SqlServer.Types
+            // SEE: https://stackoverflow.com/questions/57012534/cant-cast-sqlgeography-when-withdrawing-data-from-db/57373622#57373622
+            // AND: https://github.com/dotMorten/Microsoft.SqlServer.Types/issues/63
+            AssemblyLoadContext.Default.Resolving += OnAssemblyResolve;
+
+            Assembly OnAssemblyResolve(AssemblyLoadContext assemblyLoadContext, AssemblyName assemblyName)
+            {
+                try
+                {
+                    AssemblyLoadContext.Default.Resolving -= OnAssemblyResolve;
+                    return assemblyLoadContext.LoadFromAssemblyName(assemblyName);
+                }
+                catch
+                {
+                    if (assemblyName.Name == "Microsoft.SqlServer.Types")
+                        return typeof(SqlGeography).Assembly;
+                    throw;
+                }
+                finally
+                {
+                    AssemblyLoadContext.Default.Resolving += OnAssemblyResolve;
+                }
+            }
+            #endregion
         }
 
         public async Task ConnectAsync()
@@ -444,6 +472,7 @@ SELECT p.permission_name, SCHEMA_NAME(t.schema_id) AS SchemaName, OBJECT_NAME(p.
                 select SCHEMA_NAME(t.schema_id) AS TABLE_SCHEMA, t.name AS TABLE_NAME
                 from sys.tables t
                 where t.temporal_type_desc IN ('SYSTEM_VERSIONED_TEMPORAL_TABLE', 'NON_TEMPORAL_TABLE')
+                and t.name = 'Address'
             ")).ToList();
 
             // *** refresh to workaround NCBC-2784
