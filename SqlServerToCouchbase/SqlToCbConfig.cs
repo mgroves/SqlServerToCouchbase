@@ -14,5 +14,6 @@ namespace SqlServerToCouchbase
         public bool UseSchemaForScope { get; set; }
         public bool UseDefaultScopeForDboSchema { get; set; }
         public string DefaultPasswordForUsers { get; set; }
+        public List<DenormalizeMap> DenormalizeMaps { get; set; }
     }
 }

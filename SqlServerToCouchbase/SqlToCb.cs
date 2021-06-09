@@ -16,6 +16,7 @@ using Couchbase.Management.Collections;
 using Couchbase.Management.Users;
 using Dapper;
 using Dynamitey;
+using Humanizer;
 using Microsoft.Extensions.Logging;
 using Microsoft.SqlServer.Types;
 using Newtonsoft.Json;
@@ -147,6 +148,7 @@ namespace SqlServerToCouchbase
         /// <param name="copyData">Create Couchbase documents to match the SQL rows</param>
         /// <param name="sampleForDemo">Only create a sample set of Couchbase documents/indexes - only suitable for demos!</param>
         /// <param name="createUsers">Create Couchbase users to match the SQL users</param>
+        /// <param name="denormalize">Perform denormalization based on the DenormalizeMaps</param>
         /// <param name="pipelines">Pipelines mapped to tables to perform filters/transforms</param>
         /// <returns></returns>
         public async Task MigrateAsync(
@@ -157,11 +159,12 @@ namespace SqlServerToCouchbase
             bool copyData = false,
             bool sampleForDemo = false,
             bool createUsers = false,
+            bool denormalize = false,
             SqlPipelines pipelines = null)
         {
             if (validateNames) await ValidateNamesAsync();
 
-            var shouldContinue = createBucket || createCollections || createIndexes || copyData || createUsers;
+            var shouldContinue = createBucket || createCollections || createIndexes || copyData || createUsers || denormalize;
 
             if (!shouldContinue)
                 return;
@@ -181,6 +184,39 @@ namespace SqlServerToCouchbase
             if (copyData) await CopyDataAsync(sampleForDemo, pipelines);
 
             if (createUsers) await CreateUsersAsync();
+
+            if (denormalize) await Denormalize();
+        }
+
+        private async Task Denormalize()
+        {
+            var maps = _config.DenormalizeMaps;
+            foreach (var map in maps)
+            {
+                var collectionName = GetCollectionName(map.RootSchema, map.RootTable);
+                var scopeName = GetScopeName(map.RootSchema);
+                var scope = await _bucket.ScopeAsync(scopeName);
+                var coll = await scope.CollectionAsync(collectionName);
+                foreach (var table in map.DenormalizeTables)
+                {
+                    // get each row of data from the table in SQL Server
+                    // TODO: this should probably use buffering: false with dapper
+                    var rows = await _sqlConnection.QueryAsync($"SELECT * FROM [{table.SchemaName}].[{table.TableName}]");
+                    foreach (var row in rows)
+                    {
+                        // find the root document via foreign key
+                        var rootKey = string.Join("::", table.ForeignKeyNames.Select(k => Dynamic.InvokeGet(row, k)));
+                        // insert data into an array in the root table
+                        // TODO: issue here, what happens when program is run again?
+                        // TODO: it might be okay as long as the root document is overwritten (upserted) again to its normalized state
+                        // TODO: otherwise, might need a "reset" of all denormalized root tables at the very start
+                        await coll.MutateInAsync(rootKey, spec =>
+                        {
+                            spec.ArrayAppend(table.TableName.Pluralize(), row, true);
+                        });
+                    }
+                }
+            }
         }
 
         private async Task CreateUsersAsync()

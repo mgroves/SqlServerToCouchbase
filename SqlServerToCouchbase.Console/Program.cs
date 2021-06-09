@@ -34,7 +34,8 @@ namespace SqlServerToCouchbase.Console
                 TableNameToCollectionMapping = tableNameCollectionMapping,
                 UseSchemaForScope = config.GetValue<bool>("UseSchemaForScope"),
                 UseDefaultScopeForDboSchema = config.GetValue<bool>("UseDefaultScopeForDboSchema"),
-                DefaultPasswordForUsers = config.GetValue<string>("CouchbaseServer:DefaultUserPassword")
+                DefaultPasswordForUsers = config.GetValue<string>("CouchbaseServer:DefaultUserPassword"),
+                DenormalizeMaps = config.GetSection("DenormalizeMaps").Get<List<DenormalizeMap>>()
             };
 
             // setup DI for logging
@@ -65,6 +66,7 @@ namespace SqlServerToCouchbase.Console
                 var shouldSampleIndexes = config.GetValue<bool?>("Sampling:SampleIndexes") ?? false;
                 var shouldCreateData = config.GetValue<bool?>("Instructions:CreateData") ?? false;
                 var shouldSampleData = config.GetValue<bool?>("Sampling:SampleData") ?? false;
+                var shouldDenormalize = config.GetValue<bool?>("Instructions:Denormalize") ?? false;
 
                 var pipelines = new SqlPipelines();
                 pipelines.Add(new ModifiedDateSqlFilter(new DateTime(2014, 05, 27), "Person", "Address"));
@@ -92,6 +94,9 @@ namespace SqlServerToCouchbase.Console
 
                 if(shouldCreateData)
                     await convert.MigrateAsync(copyData: true, sampleForDemo: shouldSampleData, pipelines: pipelines);
+
+                if (shouldDenormalize)
+                    await convert.MigrateAsync(denormalize: true);
 
                 sw.Stop();
                 System.Console.WriteLine("***************************");
