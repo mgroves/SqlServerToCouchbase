@@ -1,18 +1,13 @@
-﻿using System.Collections.Generic;
+﻿using System.Collections;
+using System.Collections.Generic;
+using System.Data.SqlClient;
+using System.Threading.Tasks;
+using Couchbase;
 
 namespace SqlServerToCouchbase
 {
-    public class DenormalizeMap
+    public interface IDenormalizer
     {
-        public string RootSchema { get; set; }
-        public string RootTable { get; set; }
-        public List<DenormalizeTable> DenormalizeTables { get; set; }
-    }
-
-    public class DenormalizeTable
-    {
-        public string SchemaName { get; set; }
-        public string TableName { get; set; }
-        public List<string> ForeignKeyNames { get; set; }
+        Task DenormalizeAsync(SqlToCbConfig config, SqlConnection sqlConnection, IBucket bucket, SqlPipelines pipelines);
     }
 }

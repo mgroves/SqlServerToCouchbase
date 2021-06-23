@@ -30,7 +30,6 @@ namespace SqlServerToCouchbase
         private SqlConnection _sqlConnection;
         private ICluster _cluster;
         private IBucket _bucket;
-        private Dictionary<string, List<string>> _primaryKeyNames;
         private bool _isValid;
         private ICouchbaseCollectionManager _collManager;
 
@@ -121,7 +120,7 @@ namespace SqlServerToCouchbase
                 WHERE TABLE_TYPE = 'BASE TABLE'")).ToList();
             foreach (var table in tables)
             {
-                string collectionName = GetCollectionName(table.TABLE_SCHEMA, table.TABLE_NAME);
+                string collectionName = _config.GetCollectionName(table.TABLE_SCHEMA, table.TABLE_NAME);
                 if (collectionName.Length <= 30)
                 {
                     _logger.LogInformation($"Name `{collectionName}` is fine.");
@@ -185,38 +184,44 @@ namespace SqlServerToCouchbase
 
             if (createUsers) await CreateUsersAsync();
 
-            if (denormalize) await Denormalize();
+            if (denormalize) await Denormalize(pipelines, sampleForDemo);
         }
 
-        private async Task Denormalize()
+        private async Task Denormalize(SqlPipelines pipelines, bool sample)
         {
             var maps = _config.DenormalizeMaps;
             foreach (var map in maps)
             {
-                var collectionName = GetCollectionName(map.RootSchema, map.RootTable);
-                var scopeName = GetScopeName(map.RootSchema);
-                var scope = await _bucket.ScopeAsync(scopeName);
-                var coll = await scope.CollectionAsync(collectionName);
-                foreach (var table in map.DenormalizeTables)
-                {
-                    // get each row of data from the table in SQL Server
-                    // TODO: this should probably use buffering: false with dapper
-                    var rows = await _sqlConnection.QueryAsync($"SELECT * FROM [{table.SchemaName}].[{table.TableName}]");
-                    foreach (var row in rows)
-                    {
-                        // find the root document via foreign key
-                        var rootKey = string.Join("::", table.ForeignKeyNames.Select(k => Dynamic.InvokeGet(row, k)));
-                        // insert data into an array in the root table
-                        // TODO: issue here, what happens when program is run again?
-                        // TODO: it might be okay as long as the root document is overwritten (upserted) again to its normalized state
-                        // TODO: otherwise, might need a "reset" of all denormalized root tables at the very start
-                        await coll.MutateInAsync(rootKey, spec =>
-                        {
-                            spec.ArrayAppend(table.TableName.Pluralize(), row, true);
-                        });
-                    }
-                }
+                await map.DenormalizeAsync(_config, _sqlConnection, _bucket, pipelines);
             }
+            // var maps = _config.DenormalizeMaps;
+            // foreach (var map in maps)
+            // {
+            //     var collectionName = GetCollectionName(map.RootSchema, map.RootTable);
+            //     var scopeName = GetScopeName(map.RootSchema);
+            //     var scope = await _bucket.ScopeAsync(scopeName);
+            //     var coll = await scope.CollectionAsync(collectionName);
+            //     foreach (var table in map.DenormalizeTables)
+            //     {
+            //         // get each row of data from the table in SQL Server
+            //         // TODO: this should probably use buffering: false with dapper
+            //         var rows = await _sqlConnection.QueryAsync($"SELECT * FROM [{table.SchemaName}].[{table.TableName}]");
+            //         foreach (var row in rows)
+            //         {
+            //             // find the root document via foreign key
+            //             var rootKey = string.Join("::", table.ForeignKeyNames.Select(k => Dynamic.InvokeGet(row, k)));
+            //             // insert data into an array in the root table
+            //             // TODO: issue here, what happens when program is run again?
+            //             // TODO: it might be okay as long as the root document is overwritten (upserted) again to its normalized state
+            //             // TODO: otherwise, might need a "reset" of all denormalized root tables at the very start
+            //             // TODO: use the document instead of the row, in order to support multi-level denormalization
+            //             await coll.MutateInAsync(rootKey, spec =>
+            //             {
+            //                 spec.ArrayAppend(table.TableName.Pluralize(), row, true);
+            //             });
+            //         }
+            //     }
+            // }
         }
 
         private async Task CreateUsersAsync()
@@ -256,8 +261,8 @@ SELECT p.permission_name, SCHEMA_NAME(t.schema_id) AS SchemaName, OBJECT_NAME(p.
                     string schemaName = permission.SchemaName.ToString();
                     string tableName = permission.TableName.ToString();
 
-                    var collectionName = GetCollectionName(schemaName, tableName);
-                    var scopeName = GetScopeName(schemaName);
+                    var collectionName = _config.GetCollectionName(schemaName, tableName);
+                    var scopeName = _config.GetScopeName(schemaName);
                     switch (permissionName)
                     {
                         case "INSERT":
@@ -340,8 +345,8 @@ SELECT p.permission_name, SCHEMA_NAME(t.schema_id) AS SchemaName, OBJECT_NAME(p.
                 WHERE TABLE_TYPE = 'BASE TABLE'")).ToList();
             foreach (var table in tables)
             {
-                string collectionName = GetCollectionName(table.TABLE_SCHEMA, table.TABLE_NAME);
-                string scopeName = GetScopeName(table.TABLE_SCHEMA);
+                string collectionName = _config.GetCollectionName(table.TABLE_SCHEMA, table.TABLE_NAME);
+                string scopeName = _config.GetScopeName(table.TABLE_SCHEMA);
 
                 _logger.LogInformation($"Creating collection `{collectionName}`...");
 
@@ -386,40 +391,40 @@ SELECT p.permission_name, SCHEMA_NAME(t.schema_id) AS SchemaName, OBJECT_NAME(p.
             _logger.LogInformation($"Done");
         }
 
-        private string GetScopeName(string tableSchema)
-        {
-            if (!_config.UseSchemaForScope) return "_default";
-            if (_config.UseDefaultScopeForDboSchema && tableSchema == "dbo")
-                return "_default";
-            return tableSchema;
-        }
+        // private string GetScopeName(string tableSchema)
+        // {
+        //     if (!_config.UseSchemaForScope) return "_default";
+        //     if (_config.UseDefaultScopeForDboSchema && tableSchema == "dbo")
+        //         return "_default";
+        //     return tableSchema;
+        // }
 
-        private string GetCollectionName(string tableSchema, string tableName)
-        {
-            string rawCollectionName;
-
-            // if not using schema<-> translation, then:
-            //  dbo.Foo => Foo
-            //  Foo.Bar => Foo_Bar
-            if (!_config.UseSchemaForScope)
-                rawCollectionName = (tableSchema == "dbo" ? "" : (tableSchema + '_')) + tableName;
-            
-            // otherwise:
-            // dbo.Foo => _default (scope) -> Foo (collection)
-            // Foo.Bar => Foo (scope) -> Bar (collection)
-            else
-                rawCollectionName = tableName;
-
-            // use the mapping if there is one, collection names are limited to 30 characters
-            var collectionName = _config.TableNameToCollectionMapping.ContainsKey(rawCollectionName)
-                ? _config.TableNameToCollectionMapping[rawCollectionName]
-                : rawCollectionName;
-
-            // remove spaces--allowed in table names, not allowed in collection name
-            collectionName = collectionName.Replace(" ", "-");
-
-            return collectionName;
-        }
+        // private string GetCollectionName(string tableSchema, string tableName)
+        // {
+        //     string rawCollectionName;
+        //
+        //     // if not using schema<-> translation, then:
+        //     //  dbo.Foo => Foo
+        //     //  Foo.Bar => Foo_Bar
+        //     if (!_config.UseSchemaForScope)
+        //         rawCollectionName = (tableSchema == "dbo" ? "" : (tableSchema + '_')) + tableName;
+        //     
+        //     // otherwise:
+        //     // dbo.Foo => _default (scope) -> Foo (collection)
+        //     // Foo.Bar => Foo (scope) -> Bar (collection)
+        //     else
+        //         rawCollectionName = tableName;
+        //
+        //     // use the mapping if there is one, collection names are limited to 30 characters
+        //     var collectionName = _config.TableNameToCollectionMapping.ContainsKey(rawCollectionName)
+        //         ? _config.TableNameToCollectionMapping[rawCollectionName]
+        //         : rawCollectionName;
+        //
+        //     // remove spaces--allowed in table names, not allowed in collection name
+        //     collectionName = collectionName.Replace(" ", "-");
+        //
+        //     return collectionName;
+        // }
 
         private async Task<bool> CollectionExistsAsync(string collectionName, string scopeName)
         {
@@ -476,8 +481,8 @@ SELECT p.permission_name, SCHEMA_NAME(t.schema_id) AS SchemaName, OBJECT_NAME(p.
             {
                 string indexName = index.index_name.ToString();
 
-                var collectionName = GetCollectionName(index.schema_name, index.table_name);
-                var scopeName = GetScopeName(index.schema_name);
+                var collectionName = _config.GetCollectionName(index.schema_name, index.table_name);
+                var scopeName = _config.GetScopeName(index.schema_name);
                 _logger.LogInformation($"SQL Server Index: `{indexName}`...");
                 string fields = string.Join(",", ((string)index.columns)
                     .Split(',')
@@ -502,13 +507,12 @@ SELECT p.permission_name, SCHEMA_NAME(t.schema_id) AS SchemaName, OBJECT_NAME(p.
         private async Task CopyDataAsync(bool sampleData = false, SqlPipelines pipelines = null)
         {
             _logger.LogInformation("Copying data started...");
-            _primaryKeyNames = new Dictionary<string, List<string>>();
+            
 
             var tables = (await _sqlConnection.QueryAsync(@"
                 select SCHEMA_NAME(t.schema_id) AS TABLE_SCHEMA, t.name AS TABLE_NAME
                 from sys.tables t
                 where t.temporal_type_desc IN ('SYSTEM_VERSIONED_TEMPORAL_TABLE', 'NON_TEMPORAL_TABLE')
-                and t.name = 'Address'
             ")).ToList();
 
             // *** refresh to workaround NCBC-2784
@@ -525,7 +529,7 @@ SELECT p.permission_name, SCHEMA_NAME(t.schema_id) AS SchemaName, OBJECT_NAME(p.
 
         private async Task CopyDataFromTableToCollectionAsync(string tableSchema, string tableName, bool sampleData = false, SqlPipelines pipelines = null)
         {
-            var collectionName = GetCollectionName(tableSchema,tableName);
+            var collectionName = _config.GetCollectionName(tableSchema,tableName);
 
             _logger.LogInformation($"Copying data from `{tableSchema}.{tableName}` table to {collectionName} collection...");
             var counter = 0;
@@ -533,7 +537,7 @@ SELECT p.permission_name, SCHEMA_NAME(t.schema_id) AS SchemaName, OBJECT_NAME(p.
             ICouchbaseCollection collection;
             if (_config.UseSchemaForScope)
             {
-                var scopeName = GetScopeName(tableSchema);
+                var scopeName = _config.GetScopeName(tableSchema);
                 var scope = await _bucket.ScopeAsync(scopeName);
                 collection = await scope.CollectionAsync(collectionName);
             }
@@ -593,25 +597,25 @@ SELECT p.permission_name, SCHEMA_NAME(t.schema_id) AS SchemaName, OBJECT_NAME(p.
         private async Task<string> GetDocumentKeyFromPrimaryKeyValuesAsync(dynamic row, string tableSchema, string tableName)
         {
             // check to see if the key name are already cached
-            if (!_primaryKeyNames.ContainsKey($"{tableSchema}.{tableName}"))
+            if (!_config.PrimaryKeyNames.ContainsKey($"{tableSchema}.{tableName}"))
             {
                 var keyNames = (await _sqlConnection.QueryAsync<string>(@"SELECT COLUMN_NAME
                     FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE
                     WHERE TABLE_NAME = @tableName
                     AND TABLE_SCHEMA = @tableSchema
                     AND CONSTRAINT_NAME LIKE 'PK_%'", new { tableName, tableSchema })).ToList();
-                _primaryKeyNames.Add($"{tableSchema}.{tableName}", keyNames.ToList());
+                _config.PrimaryKeyNames.Add($"{tableSchema}.{tableName}", keyNames.ToList());
             }
-
+        
             // append key values together with :: delimeter
             // for compound keys
-            var keys = _primaryKeyNames[$"{tableSchema}.{tableName}"];
+            var keys = _config.PrimaryKeyNames[$"{tableSchema}.{tableName}"];
             var newKey = string.Join("::", keys.Select(k => Dynamic.InvokeGet(row, k)));
-
+        
             // if there IS no key, generate one
             if (string.IsNullOrWhiteSpace(newKey))
                 return Guid.NewGuid().ToString();
-
+        
             return newKey;
         }
     }

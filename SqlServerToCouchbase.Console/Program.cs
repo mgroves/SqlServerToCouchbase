@@ -35,7 +35,7 @@ namespace SqlServerToCouchbase.Console
                 UseSchemaForScope = config.GetValue<bool>("UseSchemaForScope"),
                 UseDefaultScopeForDboSchema = config.GetValue<bool>("UseDefaultScopeForDboSchema"),
                 DefaultPasswordForUsers = config.GetValue<string>("CouchbaseServer:DefaultUserPassword"),
-                DenormalizeMaps = config.GetSection("DenormalizeMaps").Get<List<DenormalizeMap>>()
+                DenormalizeMaps = ParseDenormalizerMap(config.GetSection("DenormalizeMaps")) //.Get<List<DenormalizeMap>>()
             };
 
             // setup DI for logging
@@ -69,8 +69,8 @@ namespace SqlServerToCouchbase.Console
                 var shouldDenormalize = config.GetValue<bool?>("Instructions:Denormalize") ?? false;
 
                 var pipelines = new SqlPipelines();
-                pipelines.Add(new ModifiedDateSqlFilter(new DateTime(2014, 05, 27), "Person", "Address"));
-                pipelines.Add(new ScrambleSensitivePipeline("Person", "Person", "FirstName", "LastName"));
+                //pipelines.Add(new ModifiedDateSqlFilter(new DateTime(2014, 05, 27), "Person", "Address"));
+                //pipelines.Add(new ScrambleSensitivePipeline("Person", "Person", "FirstName", "LastName"));
 
                 var sw = new Stopwatch();
                 sw.Start();
@@ -107,6 +107,20 @@ namespace SqlServerToCouchbase.Console
             {
                 convert.Dispose();
             }
+        }
+
+        private static List<IDenormalizer> ParseDenormalizerMap(IConfigurationSection section)
+        {
+            var children = section.GetChildren().ToList();
+            var list = new List<IDenormalizer>();
+            foreach (var child in children)
+            {
+                if (child["Type"] == "OneToOne")
+                    list.Add(child.Get<OneToOneDenormalizer>());
+                if(child["Type"] == "ManyToOne")
+                    list.Add(child.Get<ManyToOneDenormalizer>());
+            }
+            return list;
         }
     }
 }
