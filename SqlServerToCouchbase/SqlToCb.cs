@@ -16,7 +16,6 @@ using Couchbase.Management.Collections;
 using Couchbase.Management.Users;
 using Dapper;
 using Dynamitey;
-using Humanizer;
 using Microsoft.Extensions.Logging;
 using Microsoft.SqlServer.Types;
 using Newtonsoft.Json;
@@ -184,44 +183,16 @@ namespace SqlServerToCouchbase
 
             if (createUsers) await CreateUsersAsync();
 
-            if (denormalize) await Denormalize(pipelines, sampleForDemo);
+            if (denormalize) await Denormalize(pipelines);
         }
 
-        private async Task Denormalize(SqlPipelines pipelines, bool sample)
+        private async Task Denormalize(SqlPipelines pipelines)
         {
             var maps = _config.DenormalizeMaps;
             foreach (var map in maps)
             {
                 await map.DenormalizeAsync(_config, _sqlConnection, _bucket, pipelines);
             }
-            // var maps = _config.DenormalizeMaps;
-            // foreach (var map in maps)
-            // {
-            //     var collectionName = GetCollectionName(map.RootSchema, map.RootTable);
-            //     var scopeName = GetScopeName(map.RootSchema);
-            //     var scope = await _bucket.ScopeAsync(scopeName);
-            //     var coll = await scope.CollectionAsync(collectionName);
-            //     foreach (var table in map.DenormalizeTables)
-            //     {
-            //         // get each row of data from the table in SQL Server
-            //         // TODO: this should probably use buffering: false with dapper
-            //         var rows = await _sqlConnection.QueryAsync($"SELECT * FROM [{table.SchemaName}].[{table.TableName}]");
-            //         foreach (var row in rows)
-            //         {
-            //             // find the root document via foreign key
-            //             var rootKey = string.Join("::", table.ForeignKeyNames.Select(k => Dynamic.InvokeGet(row, k)));
-            //             // insert data into an array in the root table
-            //             // TODO: issue here, what happens when program is run again?
-            //             // TODO: it might be okay as long as the root document is overwritten (upserted) again to its normalized state
-            //             // TODO: otherwise, might need a "reset" of all denormalized root tables at the very start
-            //             // TODO: use the document instead of the row, in order to support multi-level denormalization
-            //             await coll.MutateInAsync(rootKey, spec =>
-            //             {
-            //                 spec.ArrayAppend(table.TableName.Pluralize(), row, true);
-            //             });
-            //         }
-            //     }
-            // }
         }
 
         private async Task CreateUsersAsync()
@@ -242,7 +213,7 @@ namespace SqlServerToCouchbase
                 string userName = user.name.ToString();
                 string couchbaseUserName = regMatchSpecialCharsOnly.Replace(userName, "-");
                 var permissions = (await _sqlConnection.QueryAsync(@"
-SELECT p.permission_name, SCHEMA_NAME(t.schema_id) AS SchemaName, OBJECT_NAME(p.major_id) AS TableName -- class_desc, major_id, permission_name, state_desc
+SELECT p.permission_name, SCHEMA_NAME(t.schema_id) AS SchemaName, OBJECT_NAME(p.major_id) AS TableName
   FROM sys.database_permissions p
   INNER JOIN sys.tables t ON p.major_id = t.object_id
   INNER JOIN sys.sysusers u ON USER_ID(u.name) = p.grantee_principal_id
@@ -391,41 +362,6 @@ SELECT p.permission_name, SCHEMA_NAME(t.schema_id) AS SchemaName, OBJECT_NAME(p.
             _logger.LogInformation($"Done");
         }
 
-        // private string GetScopeName(string tableSchema)
-        // {
-        //     if (!_config.UseSchemaForScope) return "_default";
-        //     if (_config.UseDefaultScopeForDboSchema && tableSchema == "dbo")
-        //         return "_default";
-        //     return tableSchema;
-        // }
-
-        // private string GetCollectionName(string tableSchema, string tableName)
-        // {
-        //     string rawCollectionName;
-        //
-        //     // if not using schema<-> translation, then:
-        //     //  dbo.Foo => Foo
-        //     //  Foo.Bar => Foo_Bar
-        //     if (!_config.UseSchemaForScope)
-        //         rawCollectionName = (tableSchema == "dbo" ? "" : (tableSchema + '_')) + tableName;
-        //     
-        //     // otherwise:
-        //     // dbo.Foo => _default (scope) -> Foo (collection)
-        //     // Foo.Bar => Foo (scope) -> Bar (collection)
-        //     else
-        //         rawCollectionName = tableName;
-        //
-        //     // use the mapping if there is one, collection names are limited to 30 characters
-        //     var collectionName = _config.TableNameToCollectionMapping.ContainsKey(rawCollectionName)
-        //         ? _config.TableNameToCollectionMapping[rawCollectionName]
-        //         : rawCollectionName;
-        //
-        //     // remove spaces--allowed in table names, not allowed in collection name
-        //     collectionName = collectionName.Replace(" ", "-");
-        //
-        //     return collectionName;
-        // }
-
         private async Task<bool> CollectionExistsAsync(string collectionName, string scopeName)
         {
             try
@@ -516,6 +452,7 @@ SELECT p.permission_name, SCHEMA_NAME(t.schema_id) AS SchemaName, OBJECT_NAME(p.
             ")).ToList();
 
             // *** refresh to workaround NCBC-2784
+            // TODO: can this be removed as of 3.1.2?
             Dispose();
             await ConnectAsync();
             await CreateBucketAsync();
