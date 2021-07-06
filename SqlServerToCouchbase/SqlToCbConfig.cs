@@ -1,4 +1,8 @@
 ﻿using System.Collections.Generic;
+using System.Data;
+using System.Linq;
+using System.Threading.Tasks;
+using Dapper;
 
 namespace SqlServerToCouchbase
 {
@@ -15,7 +19,22 @@ namespace SqlServerToCouchbase
         public bool UseDefaultScopeForDboSchema { get; set; }
         public string DefaultPasswordForUsers { get; set; }
         public List<IDenormalizer> DenormalizeMaps { get; set; }
-        public Dictionary<string, List<string>> PrimaryKeyNames;
+        private Dictionary<string, List<string>> PrimaryKeyNames;
+
+        public async Task<List<string>> GetPrimaryKeyNames(string schemaName, string tableName, IDbConnection sqlConnection)
+        {
+            if (!PrimaryKeyNames.ContainsKey($"{schemaName}.{tableName}"))
+            {
+                var keyNames = (await sqlConnection.QueryAsync<string>(@"SELECT COLUMN_NAME
+                    FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE
+                    WHERE TABLE_NAME = @tableName
+                    AND TABLE_SCHEMA = @tableSchema
+                    AND CONSTRAINT_NAME LIKE 'PK_%'", new { tableName, tableSchema = schemaName })).ToList();
+                PrimaryKeyNames.Add($"{schemaName}.{tableName}", keyNames.ToList());
+            }
+            
+            return PrimaryKeyNames[$"{schemaName}.{tableName}"];
+        }
 
         public SqlToCbConfig()
         {

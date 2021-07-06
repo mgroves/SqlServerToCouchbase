@@ -533,20 +533,9 @@ SELECT p.permission_name, SCHEMA_NAME(t.schema_id) AS SchemaName, OBJECT_NAME(p.
 
         private async Task<string> GetDocumentKeyFromPrimaryKeyValuesAsync(dynamic row, string tableSchema, string tableName)
         {
-            // check to see if the key name are already cached
-            if (!_config.PrimaryKeyNames.ContainsKey($"{tableSchema}.{tableName}"))
-            {
-                var keyNames = (await _sqlConnection.QueryAsync<string>(@"SELECT COLUMN_NAME
-                    FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE
-                    WHERE TABLE_NAME = @tableName
-                    AND TABLE_SCHEMA = @tableSchema
-                    AND CONSTRAINT_NAME LIKE 'PK_%'", new { tableName, tableSchema })).ToList();
-                _config.PrimaryKeyNames.Add($"{tableSchema}.{tableName}", keyNames.ToList());
-            }
-        
             // append key values together with :: delimeter
             // for compound keys
-            var keys = _config.PrimaryKeyNames[$"{tableSchema}.{tableName}"];
+            var keys = await _config.GetPrimaryKeyNames(tableSchema, tableName, _sqlConnection);
             var newKey = string.Join("::", keys.Select(k => Dynamic.InvokeGet(row, k)));
         
             // if there IS no key, generate one

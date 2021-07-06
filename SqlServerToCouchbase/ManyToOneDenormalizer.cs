@@ -90,20 +90,9 @@ namespace SqlServerToCouchbase
 
         private async Task<string> GetDocumentKeyFromPrimaryKeyValuesAsync(dynamic row, string tableSchema, string tableName, SqlToCbConfig config, IDbConnection sqlConnection)
         {
-            // check to see if the key name are already cached
-            if (!config.PrimaryKeyNames.ContainsKey($"{tableSchema}.{tableName}"))
-            {
-                var keyNames = (await sqlConnection.QueryAsync<string>(@"SELECT COLUMN_NAME
-                    FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE
-                    WHERE TABLE_NAME = @tableName
-                    AND TABLE_SCHEMA = @tableSchema
-                    AND CONSTRAINT_NAME LIKE 'PK_%'", new { tableName, tableSchema })).ToList();
-                config.PrimaryKeyNames.Add($"{tableSchema}.{tableName}", keyNames.ToList());
-            }
-
             // append key values together with :: delimeter
             // for compound keys
-            var keys = config.PrimaryKeyNames[$"{tableSchema}.{tableName}"];
+            var keys = await config.GetPrimaryKeyNames(tableSchema, tableName, sqlConnection);
             var newKey = string.Join("::", keys.Select(k => Dynamic.InvokeGet(row, k)));
 
             // if there IS no key, generate one
