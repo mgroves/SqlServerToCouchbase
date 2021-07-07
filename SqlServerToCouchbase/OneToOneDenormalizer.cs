@@ -9,6 +9,7 @@ using Couchbase.KeyValue;
 using Dapper;
 using Dynamitey;
 using Newtonsoft.Json.Linq;
+using Microsoft.Extensions.Logging;
 
 namespace SqlServerToCouchbase
 {
@@ -17,6 +18,10 @@ namespace SqlServerToCouchbase
         private const string DEFAULT_UNNEST_SEPARATOR = "_";
         public OneToOneFrom From { get; set; }
         public OneToOneTo To { get; set; }
+
+        public string Description =>
+            $"OneToOne Denormalize: [{From.SchemaName}.{From.TableName}] => [{To.SchemaName}.{To.TableName}] (Unnest: {To.Unnest}, Remove Foreign Key: {To.RemoveForeignKey})";
+
         public async Task DenormalizeAsync(SqlToCbConfig config, SqlConnection sqlConnection, IBucket bucket, SqlPipelines pipelines)
         {
             // **** get to "to" and "from" collections via scopes
@@ -55,9 +60,6 @@ namespace SqlServerToCouchbase
             {
                 // TODO: similar issue to ManyToOneDenormalizer--
                 // TODO: what if this is run again, after denormalization. Will it fail, or cause dupe data, or what?
-                
-                // TODO: add more logging
-                
                 var rows = outerConnection.Query(pipeline.Query, buffered: false);
 
                 foreach (var row in rows)

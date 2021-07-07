@@ -16,10 +16,11 @@ namespace SqlServerToCouchbase
     {
         public ManyToOneFrom From { get; set; }
         public ManyToOneTo To { get; set; }
+
+        public string Description => $"ManyToOne Denormalize: [{From.SchemaName}.{From.TableName}] => [{To.SchemaName}.{To.TableName}]";
+
         public async Task DenormalizeAsync(SqlToCbConfig config, SqlConnection sqlConnection, IBucket bucket, SqlPipelines pipelines)
         {
-            // TODO: add more logging
-            
             // **** get to "to" and "from" collections via scopes
             var fromCollectionName = config.GetCollectionName(From.SchemaName, From.TableName);
             var toCollectionName = config.GetCollectionName(To.SchemaName, To.TableName);

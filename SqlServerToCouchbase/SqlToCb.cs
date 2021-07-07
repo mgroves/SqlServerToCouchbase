@@ -188,10 +188,13 @@ namespace SqlServerToCouchbase
 
         private async Task Denormalize(SqlPipelines pipelines)
         {
+            _logger.LogInformation("Starting denormalizing.");
             var maps = _config.DenormalizeMaps;
             foreach (var map in maps)
             {
+                _logger.LogInformation($"{map.Description}");
                 await map.DenormalizeAsync(_config, _sqlConnection, _bucket, pipelines);
+                _logger.LogInformation("Complete.");
             }
         }
 

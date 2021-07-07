@@ -8,6 +8,7 @@ namespace SqlServerToCouchbase
 {
     public interface IDenormalizer
     {
+        string Description { get; }
         Task DenormalizeAsync(SqlToCbConfig config, SqlConnection sqlConnection, IBucket bucket, SqlPipelines pipelines);
     }
 }
