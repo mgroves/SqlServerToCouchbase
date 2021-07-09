@@ -34,7 +34,8 @@ namespace SqlServerToCouchbase.Console
                 TableNameToCollectionMapping = tableNameCollectionMapping,
                 UseSchemaForScope = config.GetValue<bool>("UseSchemaForScope"),
                 UseDefaultScopeForDboSchema = config.GetValue<bool>("UseDefaultScopeForDboSchema"),
-                DefaultPasswordForUsers = config.GetValue<string>("CouchbaseServer:DefaultUserPassword")
+                DefaultPasswordForUsers = config.GetValue<string>("CouchbaseServer:DefaultUserPassword"),
+                DenormalizeMaps = ParseDenormalizerMap(config.GetSection("DenormalizeMaps")) //.Get<List<DenormalizeMap>>()
             };
 
             // setup DI for logging
@@ -65,10 +66,11 @@ namespace SqlServerToCouchbase.Console
                 var shouldSampleIndexes = config.GetValue<bool?>("Sampling:SampleIndexes") ?? false;
                 var shouldCreateData = config.GetValue<bool?>("Instructions:CreateData") ?? false;
                 var shouldSampleData = config.GetValue<bool?>("Sampling:SampleData") ?? false;
+                var shouldDenormalize = config.GetValue<bool?>("Instructions:Denormalize") ?? false;
 
                 var pipelines = new SqlPipelines();
-                pipelines.Add(new ModifiedDateSqlFilter(new DateTime(2014, 05, 27), "Person", "Address"));
-                pipelines.Add(new ScrambleSensitivePipeline("Person", "Person", "FirstName", "LastName"));
+                //pipelines.Add(new ModifiedDateSqlFilter(new DateTime(2014, 05, 27), "Person", "Address"));
+                //pipelines.Add(new ScrambleSensitivePipeline("Person", "Person", "FirstName", "LastName"));
 
                 var sw = new Stopwatch();
                 sw.Start();
@@ -93,6 +95,9 @@ namespace SqlServerToCouchbase.Console
                 if(shouldCreateData)
                     await convert.MigrateAsync(copyData: true, sampleForDemo: shouldSampleData, pipelines: pipelines);
 
+                if (shouldDenormalize)
+                    await convert.MigrateAsync(denormalize: true);
+
                 sw.Stop();
                 System.Console.WriteLine("***************************");
                 System.Console.WriteLine($"Time elapsed: {sw.Elapsed}");
@@ -102,6 +107,20 @@ namespace SqlServerToCouchbase.Console
             {
                 convert.Dispose();
             }
+        }
+
+        private static List<IDenormalizer> ParseDenormalizerMap(IConfigurationSection section)
+        {
+            var children = section.GetChildren().ToList();
+            var list = new List<IDenormalizer>();
+            foreach (var child in children)
+            {
+                if (child["Type"] == "OneToOne")
+                    list.Add(child.Get<OneToOneDenormalizer>());
+                if(child["Type"] == "ManyToOne")
+                    list.Add(child.Get<ManyToOneDenormalizer>());
+            }
+            return list;
         }
     }
 }

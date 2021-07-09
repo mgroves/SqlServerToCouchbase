@@ -29,7 +29,6 @@ namespace SqlServerToCouchbase
         private SqlConnection _sqlConnection;
         private ICluster _cluster;
         private IBucket _bucket;
-        private Dictionary<string, List<string>> _primaryKeyNames;
         private bool _isValid;
         private ICouchbaseCollectionManager _collManager;
 
@@ -120,7 +119,7 @@ namespace SqlServerToCouchbase
                 WHERE TABLE_TYPE = 'BASE TABLE'")).ToList();
             foreach (var table in tables)
             {
-                string collectionName = GetCollectionName(table.TABLE_SCHEMA, table.TABLE_NAME);
+                string collectionName = _config.GetCollectionName(table.TABLE_SCHEMA, table.TABLE_NAME);
                 if (collectionName.Length <= 30)
                 {
                     _logger.LogInformation($"Name `{collectionName}` is fine.");
@@ -147,6 +146,7 @@ namespace SqlServerToCouchbase
         /// <param name="copyData">Create Couchbase documents to match the SQL rows</param>
         /// <param name="sampleForDemo">Only create a sample set of Couchbase documents/indexes - only suitable for demos!</param>
         /// <param name="createUsers">Create Couchbase users to match the SQL users</param>
+        /// <param name="denormalize">Perform denormalization based on the DenormalizeMaps</param>
         /// <param name="pipelines">Pipelines mapped to tables to perform filters/transforms</param>
         /// <returns></returns>
         public async Task MigrateAsync(
@@ -157,11 +157,12 @@ namespace SqlServerToCouchbase
             bool copyData = false,
             bool sampleForDemo = false,
             bool createUsers = false,
+            bool denormalize = false,
             SqlPipelines pipelines = null)
         {
             if (validateNames) await ValidateNamesAsync();
 
-            var shouldContinue = createBucket || createCollections || createIndexes || copyData || createUsers;
+            var shouldContinue = createBucket || createCollections || createIndexes || copyData || createUsers || denormalize;
 
             if (!shouldContinue)
                 return;
@@ -181,6 +182,20 @@ namespace SqlServerToCouchbase
             if (copyData) await CopyDataAsync(sampleForDemo, pipelines);
 
             if (createUsers) await CreateUsersAsync();
+
+            if (denormalize) await Denormalize(pipelines);
+        }
+
+        private async Task Denormalize(SqlPipelines pipelines)
+        {
+            _logger.LogInformation("Starting denormalizing.");
+            var maps = _config.DenormalizeMaps;
+            foreach (var map in maps)
+            {
+                _logger.LogInformation($"{map.Description}");
+                await map.DenormalizeAsync(_config, _sqlConnection, _bucket, pipelines);
+                _logger.LogInformation("Complete.");
+            }
         }
 
         private async Task CreateUsersAsync()
@@ -201,7 +216,7 @@ namespace SqlServerToCouchbase
                 string userName = user.name.ToString();
                 string couchbaseUserName = regMatchSpecialCharsOnly.Replace(userName, "-");
                 var permissions = (await _sqlConnection.QueryAsync(@"
-SELECT p.permission_name, SCHEMA_NAME(t.schema_id) AS SchemaName, OBJECT_NAME(p.major_id) AS TableName -- class_desc, major_id, permission_name, state_desc
+SELECT p.permission_name, SCHEMA_NAME(t.schema_id) AS SchemaName, OBJECT_NAME(p.major_id) AS TableName
   FROM sys.database_permissions p
   INNER JOIN sys.tables t ON p.major_id = t.object_id
   INNER JOIN sys.sysusers u ON USER_ID(u.name) = p.grantee_principal_id
@@ -220,8 +235,8 @@ SELECT p.permission_name, SCHEMA_NAME(t.schema_id) AS SchemaName, OBJECT_NAME(p.
                     string schemaName = permission.SchemaName.ToString();
                     string tableName = permission.TableName.ToString();
 
-                    var collectionName = GetCollectionName(schemaName, tableName);
-                    var scopeName = GetScopeName(schemaName);
+                    var collectionName = _config.GetCollectionName(schemaName, tableName);
+                    var scopeName = _config.GetScopeName(schemaName);
                     switch (permissionName)
                     {
                         case "INSERT":
@@ -304,8 +319,8 @@ SELECT p.permission_name, SCHEMA_NAME(t.schema_id) AS SchemaName, OBJECT_NAME(p.
                 WHERE TABLE_TYPE = 'BASE TABLE'")).ToList();
             foreach (var table in tables)
             {
-                string collectionName = GetCollectionName(table.TABLE_SCHEMA, table.TABLE_NAME);
-                string scopeName = GetScopeName(table.TABLE_SCHEMA);
+                string collectionName = _config.GetCollectionName(table.TABLE_SCHEMA, table.TABLE_NAME);
+                string scopeName = _config.GetScopeName(table.TABLE_SCHEMA);
 
                 _logger.LogInformation($"Creating collection `{collectionName}`...");
 
@@ -348,41 +363,6 @@ SELECT p.permission_name, SCHEMA_NAME(t.schema_id) AS SchemaName, OBJECT_NAME(p.
             }
             
             _logger.LogInformation($"Done");
-        }
-
-        private string GetScopeName(string tableSchema)
-        {
-            if (!_config.UseSchemaForScope) return "_default";
-            if (_config.UseDefaultScopeForDboSchema && tableSchema == "dbo")
-                return "_default";
-            return tableSchema;
-        }
-
-        private string GetCollectionName(string tableSchema, string tableName)
-        {
-            string rawCollectionName;
-
-            // if not using schema<-> translation, then:
-            //  dbo.Foo => Foo
-            //  Foo.Bar => Foo_Bar
-            if (!_config.UseSchemaForScope)
-                rawCollectionName = (tableSchema == "dbo" ? "" : (tableSchema + '_')) + tableName;
-            
-            // otherwise:
-            // dbo.Foo => _default (scope) -> Foo (collection)
-            // Foo.Bar => Foo (scope) -> Bar (collection)
-            else
-                rawCollectionName = tableName;
-
-            // use the mapping if there is one, collection names are limited to 30 characters
-            var collectionName = _config.TableNameToCollectionMapping.ContainsKey(rawCollectionName)
-                ? _config.TableNameToCollectionMapping[rawCollectionName]
-                : rawCollectionName;
-
-            // remove spaces--allowed in table names, not allowed in collection name
-            collectionName = collectionName.Replace(" ", "-");
-
-            return collectionName;
         }
 
         private async Task<bool> CollectionExistsAsync(string collectionName, string scopeName)
@@ -440,8 +420,8 @@ SELECT p.permission_name, SCHEMA_NAME(t.schema_id) AS SchemaName, OBJECT_NAME(p.
             {
                 string indexName = index.index_name.ToString();
 
-                var collectionName = GetCollectionName(index.schema_name, index.table_name);
-                var scopeName = GetScopeName(index.schema_name);
+                var collectionName = _config.GetCollectionName(index.schema_name, index.table_name);
+                var scopeName = _config.GetScopeName(index.schema_name);
                 _logger.LogInformation($"SQL Server Index: `{indexName}`...");
                 string fields = string.Join(",", ((string)index.columns)
                     .Split(',')
@@ -466,16 +446,16 @@ SELECT p.permission_name, SCHEMA_NAME(t.schema_id) AS SchemaName, OBJECT_NAME(p.
         private async Task CopyDataAsync(bool sampleData = false, SqlPipelines pipelines = null)
         {
             _logger.LogInformation("Copying data started...");
-            _primaryKeyNames = new Dictionary<string, List<string>>();
+            
 
             var tables = (await _sqlConnection.QueryAsync(@"
                 select SCHEMA_NAME(t.schema_id) AS TABLE_SCHEMA, t.name AS TABLE_NAME
                 from sys.tables t
                 where t.temporal_type_desc IN ('SYSTEM_VERSIONED_TEMPORAL_TABLE', 'NON_TEMPORAL_TABLE')
-                and t.name = 'Address'
             ")).ToList();
 
             // *** refresh to workaround NCBC-2784
+            // TODO: can this be removed as of 3.1.2?
             Dispose();
             await ConnectAsync();
             await CreateBucketAsync();
@@ -489,7 +469,7 @@ SELECT p.permission_name, SCHEMA_NAME(t.schema_id) AS SchemaName, OBJECT_NAME(p.
 
         private async Task CopyDataFromTableToCollectionAsync(string tableSchema, string tableName, bool sampleData = false, SqlPipelines pipelines = null)
         {
-            var collectionName = GetCollectionName(tableSchema,tableName);
+            var collectionName = _config.GetCollectionName(tableSchema,tableName);
 
             _logger.LogInformation($"Copying data from `{tableSchema}.{tableName}` table to {collectionName} collection...");
             var counter = 0;
@@ -497,7 +477,7 @@ SELECT p.permission_name, SCHEMA_NAME(t.schema_id) AS SchemaName, OBJECT_NAME(p.
             ICouchbaseCollection collection;
             if (_config.UseSchemaForScope)
             {
-                var scopeName = GetScopeName(tableSchema);
+                var scopeName = _config.GetScopeName(tableSchema);
                 var scope = await _bucket.ScopeAsync(scopeName);
                 collection = await scope.CollectionAsync(collectionName);
             }
@@ -556,26 +536,15 @@ SELECT p.permission_name, SCHEMA_NAME(t.schema_id) AS SchemaName, OBJECT_NAME(p.
 
         private async Task<string> GetDocumentKeyFromPrimaryKeyValuesAsync(dynamic row, string tableSchema, string tableName)
         {
-            // check to see if the key name are already cached
-            if (!_primaryKeyNames.ContainsKey($"{tableSchema}.{tableName}"))
-            {
-                var keyNames = (await _sqlConnection.QueryAsync<string>(@"SELECT COLUMN_NAME
-                    FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE
-                    WHERE TABLE_NAME = @tableName
-                    AND TABLE_SCHEMA = @tableSchema
-                    AND CONSTRAINT_NAME LIKE 'PK_%'", new { tableName, tableSchema })).ToList();
-                _primaryKeyNames.Add($"{tableSchema}.{tableName}", keyNames.ToList());
-            }
-
             // append key values together with :: delimeter
             // for compound keys
-            var keys = _primaryKeyNames[$"{tableSchema}.{tableName}"];
+            var keys = await _config.GetPrimaryKeyNames(tableSchema, tableName, _sqlConnection);
             var newKey = string.Join("::", keys.Select(k => Dynamic.InvokeGet(row, k)));
-
+        
             // if there IS no key, generate one
             if (string.IsNullOrWhiteSpace(newKey))
                 return Guid.NewGuid().ToString();
-
+        
             return newKey;
         }
     }
