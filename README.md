@@ -139,6 +139,98 @@ You may only add one filter/transform object per SQL Server table.
 
 _Why override `IsIncluded` or `Transform` instead of overriding `Query`? Isn't changing the query going to be more efficient?_ Yes, giving a custom SQL query is going to be the most efficient way to filter/transform. However, if you have complex logic better expressed in C# and/or have need to call out to services that SQL Server doesn't have access to, you can use these functions instead.
 
+## Denormalization
+
+After the data is copied over, you can run one or more denormalizations. The `SqlToCbConfig` object you use has a `DenormalizeMaps` property. Denormalization definitions are applied **in order** to the documents. So if you want to denormalize at multiple levels, make sure that the farthest branches of denormalization run first. The documents will be then cascaded up to the root.
+
+Two denormalization objects that are built-in are `ManyToOneDenormalizer` and `OneToOneDenormalizer`. (You can define your own normalizer by implementing `IDenormalizer`).
+
+### ManyToOneDenormalizer
+
+A many-to-one denormalizer means that you will be embedding documents in one collection into their corresponding "parent" documents, using their foreign key values. (Couchbase does not support foreign key constraints, but all the values needed are present in the converted documents).
+
+For example, if you have a ShoppingCart collection and a ShoppingCartItems collection, you can use ManyToOneDenormalizer to embed all the ShoppingCartItems documents into their "parent" ShoppingCart documents.
+
+This object contains two properties: `From` and `To`.
+
+`From` defines the "child" data: SchemaName, TableName, and ForeignKeyNames.
+
+`To` defined the "parent" data: SchemaName and TableName.
+
+After embeddeding, the embedded values will live in an array with a pluralized version of the table name.
+
+For instance, a shopping cart example:
+
+```
+From.SchemaName = "Shopping"
+From.TableName = "ShoppingCartItems"
+From.PrimaryKeyNames = [ "ShoppingCartId" ]
+
+To.SchemaName = "Shopping"
+To.TableName = "ShoppingCart"
+```
+
+The end result will be documents in the ShoppingCart collection like:
+
+```
+{
+    "ShoppingCartId" : 123,
+    "CartCreatedDt" : "2021-07-15",
+    "ShoppingCartItems" : [
+        { "ShoppingCartId" : 123, "Desc" : "Widget", "Qty" : 1, "Price" : 9.99 },
+        { "ShoppingCartId" : 123, "Desc" : "Doohickey", "Qty" : 3, "Price" : 0.99 },
+    ]
+}
+```
+
+Notice the vestigial `ShoppingCartId` field in the array of nested objects.
+
+The documents in the ShoppingCartItems collection ALSO remain as vestigial data, though it can be easily removed with the Couchbase SDK directly if you want.
+
+### OneToOneDenormalizer
+
+A one-to-one denormalizer means you will be embedding a document from one collection into a document in another collection by using the foreign key value from one document. (Couchbase does not support foreign key constraints, but all the values needed are present in the converted documents).
+
+For example, if you have a document in a Person collection with a `PhoneNumberId` field which corresponds to a document in the PhoneNumber document, the PhoneNumber document will be embedded into the "parent" document.
+
+This object contains two properties: `From` and `To`.
+
+`From` defines the "child" data: SchemaName and TableName.
+
+`To` defined the "parent" data, and some optional transforms: SchemaName, TableName, RemoveForeignKey, Unnest, UnnestSeparator, ForeignKeyNames
+
+For instance, the phone number example:
+
+```
+From.SchemaName = "Person"
+From.TableName = "PhoneNumber"
+
+To.SchemaName = "Person"
+To.TableName = "Person"
+To.ForeignKeyNames = [ "HomePhoneNumberId" ]
+To.RemoveForeignKey = false
+To.Unnest = false
+To.UnnestSeparator = "_"
+```
+
+The end result will be documents in the Person collection like:
+
+```
+{
+    "PersonId" : 123,
+    "Name" : "Matt",
+    "PhoneNumberId" : 456,
+    "PhoneNumber" : {
+        "PhoneNumberId" : 456,
+        "Number" : "111-222-3333"
+    }
+}
+```
+
+Notice the vestigial PhoneNumberId field: if you set RemoveForeignKey to true, this will be automatically removed.
+
+Notice that PhoneNumber is a nested object: if you set Unnest to true, all the fields will be nested up one level. The field names will be prepended with the old table name and whatever unnest seperator you define.
+
 ## Known limitations:
 
 * SQL Server views are not translated at all. [Couchbase M/R Views](https://docs.couchbase.com/server/current/learn/views/views-intro.html) are *roughly* equivalent.
@@ -152,3 +244,5 @@ _Why override `IsIncluded` or `Transform` instead of overriding `Query`? Isn't c
 * HierarchyId data type - this SQL Server specific data type can *possibly* be translated to JSON, but for now it doesn't translate to anything meaningful
 
 * Temporal tables - Currently the "Archive" tables are not being copied over, only the snapshots. Temporal data capabilities are not built into Couchbase, they would need to be added with a combination of client code and/or Couchbase Eventing.
+
+* Denormalization: if you run denormalization on the data multiple times, it will likely result in duplicates. You should rerun the data copy BEFORE denormalization every time.
