@@ -1,9 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Data.SqlClient;
 using System.Linq;
-using System.Reflection;
-using System.Runtime.Loader;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using Couchbase;
@@ -14,61 +11,36 @@ using Couchbase.KeyValue;
 using Couchbase.Management.Buckets;
 using Couchbase.Management.Collections;
 using Couchbase.Management.Users;
-using Dapper;
 using Dynamitey;
 using Microsoft.Extensions.Logging;
-using Microsoft.SqlServer.Types;
 using Newtonsoft.Json;
+using SqlServerToCouchbase.DatabasesFrom;
 
 namespace SqlServerToCouchbase
 {
     public class SqlToCb : IDisposable
     {
         private readonly SqlToCbConfig _config;
+        private readonly IDatabaseFrom _dbFrom;
         private readonly ILogger _logger;
-        private SqlConnection _sqlConnection;
         private ICluster _cluster;
         private IBucket _bucket;
         private bool _isValid;
         private ICouchbaseCollectionManager _collManager;
 
-        public SqlToCb(SqlToCbConfig config, ILoggerFactory loggerFactory)
+        public SqlToCb(SqlToCbConfig config, ILoggerFactory loggerFactory, IDatabaseFrom dbFrom)
         {
             _config = config;
+            _dbFrom = dbFrom;
             _logger = loggerFactory.CreateLogger<SqlToCb>();
             _isValid = false;
 
-            #region for use with dotMorten.Microsoft.SqlServer.Types
-            // SEE: https://stackoverflow.com/questions/57012534/cant-cast-sqlgeography-when-withdrawing-data-from-db/57373622#57373622
-            // AND: https://github.com/dotMorten/Microsoft.SqlServer.Types/issues/63
-            AssemblyLoadContext.Default.Resolving += OnAssemblyResolve;
-
-            Assembly OnAssemblyResolve(AssemblyLoadContext assemblyLoadContext, AssemblyName assemblyName)
-            {
-                try
-                {
-                    AssemblyLoadContext.Default.Resolving -= OnAssemblyResolve;
-                    return assemblyLoadContext.LoadFromAssemblyName(assemblyName);
-                }
-                catch
-                {
-                    if (assemblyName.Name == "Microsoft.SqlServer.Types")
-                        return typeof(SqlGeography).Assembly;
-                    throw;
-                }
-                finally
-                {
-                    AssemblyLoadContext.Default.Resolving += OnAssemblyResolve;
-                }
-            }
-            #endregion
+            _dbFrom.Initialize();
         }
 
         public async Task ConnectAsync()
         {
-            _logger.LogInformation("Connecting to SQL Server...");
-            _sqlConnection = new SqlConnection(_config.SourceSqlConnectionString);
-            _logger.LogInformation("Done");
+            _dbFrom.Connect();
 
             _logger.LogInformation("Connecting to Couchbase...");
             var serializerSettings = new JsonSerializerSettings();
@@ -88,10 +60,7 @@ namespace SqlServerToCouchbase
         {
             try
             {
-                _logger.LogInformation("Disconnecting from SQL Server...");
-                _sqlConnection.Close();
-                _sqlConnection.Dispose();
-                _logger.LogInformation("Done");
+                _dbFrom.Dispose();
             }
             catch (Exception ex)
             {
@@ -113,10 +82,7 @@ namespace SqlServerToCouchbase
         private async Task ValidateNamesAsync()
         {
             _logger.LogInformation("Now validating names...");
-            var tables = (await _sqlConnection.QueryAsync(@"
-                select TABLE_SCHEMA, TABLE_NAME
-                from INFORMATION_SCHEMA.TABLES
-                WHERE TABLE_TYPE = 'BASE TABLE'")).ToList();
+            var tables = await _dbFrom.GetListOfTables();
             foreach (var table in tables)
             {
                 string collectionName = _config.GetCollectionName(table.TABLE_SCHEMA, table.TABLE_NAME);
@@ -193,7 +159,7 @@ namespace SqlServerToCouchbase
             foreach (var map in maps)
             {
                 _logger.LogInformation($"{map.Description}");
-                await map.DenormalizeAsync(_config, _sqlConnection, _bucket, pipelines);
+                await map.DenormalizeAsync(_config, _dbFrom, _bucket, pipelines);
                 _logger.LogInformation("Complete.");
             }
         }
@@ -205,24 +171,12 @@ namespace SqlServerToCouchbase
 
             Regex regMatchSpecialCharsOnly = new Regex("[^a-zA-Z0-9']");
 
-            var users = (await _sqlConnection.QueryAsync(@"
-                SELECT u.name
-                FROM sys.sysusers u
-                WHERE u.issqlrole = 0
-                AND u.hasdbaccess = 1")).ToList();
+            var users = await _dbFrom.GetUserNames();
             foreach (var user in users)
             {
-                _logger.LogInformation($"Processing SQL user `{user.name}`...");
                 string userName = user.name.ToString();
                 string couchbaseUserName = regMatchSpecialCharsOnly.Replace(userName, "-");
-                var permissions = (await _sqlConnection.QueryAsync(@"
-SELECT p.permission_name, SCHEMA_NAME(t.schema_id) AS SchemaName, OBJECT_NAME(p.major_id) AS TableName
-  FROM sys.database_permissions p
-  INNER JOIN sys.tables t ON p.major_id = t.object_id
-  INNER JOIN sys.sysusers u ON USER_ID(u.name) = p.grantee_principal_id
-  WHERE p.grantee_principal_id = USER_ID(@userName)
-  AND  p.class_desc = 'OBJECT_OR_COLUMN'
-  AND p.permission_name IN ('INSERT', 'SELECT', 'UPDATE', 'DELETE')", new { userName })).ToList();
+                var permissions = await _dbFrom.GetPermissions(userName);
 
                 var roles = new List<Role>();
                 var couchbaseUser = new User(couchbaseUserName);
@@ -237,28 +191,7 @@ SELECT p.permission_name, SCHEMA_NAME(t.schema_id) AS SchemaName, OBJECT_NAME(p.
 
                     var collectionName = _config.GetCollectionName(schemaName, tableName);
                     var scopeName = _config.GetScopeName(schemaName);
-                    switch (permissionName)
-                    {
-                        case "INSERT":
-                            roles.Add(new Role("query_insert", _config.TargetBucket, scopeName, collectionName));
-                            roles.Add(new Role("data_writer", _config.TargetBucket, scopeName, collectionName));
-                            break;
-                        case "SELECT":
-                            roles.Add(new Role("query_select", _config.TargetBucket, scopeName, collectionName));
-                            roles.Add(new Role("data_reader", _config.TargetBucket, scopeName, collectionName));
-                            break;
-                        case "UPDATE":
-                            roles.Add(new Role("query_update", _config.TargetBucket, scopeName, collectionName));
-                            roles.Add(new Role("data_writer", _config.TargetBucket, scopeName, collectionName));
-                            break;
-                        case "DELETE":
-                            roles.Add(new Role("query_delete", _config.TargetBucket, scopeName, collectionName));
-                            roles.Add(new Role("data_writer", _config.TargetBucket, scopeName, collectionName));
-                            break;
-                        default:
-                            _logger.LogWarning($"Permission name was `{permissionName}`, which is not INSERT, SELECT, UPDATE, DELETE. It's not being copied over to Couchbase");
-                            break;
-                    }
+                    roles.AddRange(_dbFrom.GetRoles(permissionName, scopeName, collectionName));
                 }
 
                 // if there are no roles, then assume this user should have access
@@ -313,10 +246,7 @@ SELECT p.permission_name, SCHEMA_NAME(t.schema_id) AS SchemaName, OBJECT_NAME(p.
         private async Task CreateCollectionsAsync()
         {
             _logger.LogInformation("Creating collections...");
-            var tables = (await _sqlConnection.QueryAsync(@"
-                select TABLE_SCHEMA, TABLE_NAME
-                from INFORMATION_SCHEMA.TABLES
-                WHERE TABLE_TYPE = 'BASE TABLE'")).ToList();
+            var tables = await _dbFrom.GetTableNames();
             foreach (var table in tables)
             {
                 string collectionName = _config.GetCollectionName(table.TABLE_SCHEMA, table.TABLE_NAME);
@@ -391,27 +321,7 @@ SELECT p.permission_name, SCHEMA_NAME(t.schema_id) AS SchemaName, OBJECT_NAME(p.
         private async Task CreateIndexesAsync(bool sampleForDemo = false)
         {
             _logger.LogInformation($"Creating{(sampleForDemo ? " some sample" : " ")} indexes...");
-            var indexes = (await _sqlConnection.QueryAsync(@"
-                select i.[name] as index_name,
-                    substring(column_names, 1, len(column_names)-1) as [columns],
-                    schema_name(t.schema_id) AS schema_name, 
-					t.[name] as table_name
-                from sys.objects t
-                    inner join sys.indexes i
-                        on t.object_id = i.object_id
-                    cross apply (select col.[name] + ', '
-                                    from sys.index_columns ic
-                                        inner join sys.columns col
-                                            on ic.object_id = col.object_id
-                                            and ic.column_id = col.column_id
-                                    where ic.object_id = t.object_id
-                                        and ic.index_id = i.index_id
-                                            order by key_ordinal
-                                            for xml path ('') ) D (column_names)
-                where t.is_ms_shipped <> 1
-                and index_id > 0
-                and t.[type] = 'U'
-                ")).ToList();
+            var indexes = await _dbFrom.GetIndexes();
 
             if (sampleForDemo)
                 indexes = indexes.Take(5).ToList();
@@ -422,7 +332,7 @@ SELECT p.permission_name, SCHEMA_NAME(t.schema_id) AS SchemaName, OBJECT_NAME(p.
 
                 var collectionName = _config.GetCollectionName(index.schema_name, index.table_name);
                 var scopeName = _config.GetScopeName(index.schema_name);
-                _logger.LogInformation($"SQL Server Index: `{indexName}`...");
+                _logger.LogInformation($"From Index: `{indexName}`...");
                 string fields = string.Join(",", ((string)index.columns)
                     .Split(',')
                     .Select(f => $"`{f}`"));
@@ -446,14 +356,9 @@ SELECT p.permission_name, SCHEMA_NAME(t.schema_id) AS SchemaName, OBJECT_NAME(p.
         private async Task CopyDataAsync(bool sampleData = false, SqlPipelines pipelines = null)
         {
             _logger.LogInformation("Copying data started...");
+
+            var tables = await _dbFrom.GetTableNames();
             
-
-            var tables = (await _sqlConnection.QueryAsync(@"
-                select SCHEMA_NAME(t.schema_id) AS TABLE_SCHEMA, t.name AS TABLE_NAME
-                from sys.tables t
-                where t.temporal_type_desc IN ('SYSTEM_VERSIONED_TEMPORAL_TABLE', 'NON_TEMPORAL_TABLE')
-            ")).ToList();
-
             // *** refresh to workaround NCBC-2784
             // TODO: can this be removed as of 3.1.2?
             Dispose();
@@ -497,10 +402,10 @@ SELECT p.permission_name, SCHEMA_NAME(t.schema_id) AS SchemaName, OBJECT_NAME(p.
 
             // buffered false because this could be a very large amount of data
             // see: https://dapper-tutorial.net/buffered
-            using (var outerConnection = new SqlConnection(_config.SourceSqlConnectionString))
+            using (var outerConnection = _dbFrom.GetNewConnection(_config.SourceSqlConnectionString))
             {
                 _logger.LogInformation($"Opening non-buffered connection to `{tableSchema}.{tableName}`");
-                var rows = outerConnection.Query(pipeline.Query, buffered: false);
+                var rows = _dbFrom.QueryBulk(outerConnection, pipeline);
 
                 _logger.LogInformation("Writing row(s)...");
                 foreach (var row in rows)
@@ -538,7 +443,7 @@ SELECT p.permission_name, SCHEMA_NAME(t.schema_id) AS SchemaName, OBJECT_NAME(p.
         {
             // append key values together with :: delimeter
             // for compound keys
-            var keys = await _config.GetPrimaryKeyNames(tableSchema, tableName, _sqlConnection);
+            var keys = await _config.GetPrimaryKeyNames(tableSchema, tableName, _dbFrom);
             var newKey = string.Join("::", keys.Select(k => Dynamic.InvokeGet(row, k)));
         
             // if there IS no key, generate one

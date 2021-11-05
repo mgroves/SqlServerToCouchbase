@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using SqlServerToCouchbase.DatabasesFrom;
 
 namespace SqlServerToCouchbase.Console
 {
@@ -45,6 +46,7 @@ namespace SqlServerToCouchbase.Console
                     .AddFilter(level => level >= LogLevel.Information)
                 )
                 .AddSingleton<SqlToCbConfig>(migrateConfig)
+                .AddTransient<IDatabaseFrom, SqlServerFrom>()
                 .AddTransient<SqlToCb>()
                 .BuildServiceProvider();
 

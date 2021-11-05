@@ -3,6 +3,7 @@ using System.Data;
 using System.Linq;
 using System.Threading.Tasks;
 using Dapper;
+using SqlServerToCouchbase.DatabasesFrom;
 
 namespace SqlServerToCouchbase
 {
@@ -21,15 +22,11 @@ namespace SqlServerToCouchbase
         public List<IDenormalizer> DenormalizeMaps { get; set; }
         private Dictionary<string, List<string>> PrimaryKeyNames;
 
-        public async Task<List<string>> GetPrimaryKeyNames(string schemaName, string tableName, IDbConnection sqlConnection)
+        public async Task<List<string>> GetPrimaryKeyNames(string schemaName, string tableName, IDatabaseFrom dbFrom)
         {
             if (!PrimaryKeyNames.ContainsKey($"{schemaName}.{tableName}"))
             {
-                var keyNames = (await sqlConnection.QueryAsync<string>(@"SELECT COLUMN_NAME
-                    FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE
-                    WHERE TABLE_NAME = @tableName
-                    AND TABLE_SCHEMA = @tableSchema
-                    AND CONSTRAINT_NAME LIKE 'PK_%'", new { tableName, tableSchema = schemaName })).ToList();
+                var keyNames = await dbFrom.GetKeyNames(schemaName, tableName);
                 PrimaryKeyNames.Add($"{schemaName}.{tableName}", keyNames.ToList());
             }
             
