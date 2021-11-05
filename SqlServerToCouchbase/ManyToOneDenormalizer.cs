@@ -9,6 +9,7 @@ using Couchbase.KeyValue;
 using Dapper;
 using Dynamitey;
 using Humanizer;
+using SqlServerToCouchbase.DatabasesFrom;
 
 namespace SqlServerToCouchbase
 {
@@ -19,7 +20,7 @@ namespace SqlServerToCouchbase
 
         public string Description => $"ManyToOne Denormalize: [{From.SchemaName}.{From.TableName}] => [{To.SchemaName}.{To.TableName}]";
 
-        public async Task DenormalizeAsync(SqlToCbConfig config, SqlConnection sqlConnection, IBucket bucket, SqlPipelines pipelines)
+        public async Task DenormalizeAsync(SqlToCbConfig config, IDatabaseFrom dbFrom, IBucket bucket, SqlPipelines pipelines)
         {
             // **** get to "to" and "from" collections via scopes
             var fromCollectionName = config.GetCollectionName(From.SchemaName, From.TableName);
@@ -73,7 +74,7 @@ namespace SqlServerToCouchbase
                         continue;
 
                     // **** embed the corresponding document into the target doc
-                    string keyForDocToEmbed = await GetDocumentKeyFromPrimaryKeyValuesAsync(row, From.SchemaName, From.TableName, config, sqlConnection);
+                    string keyForDocToEmbed = await GetDocumentKeyFromPrimaryKeyValuesAsync(row, From.SchemaName, From.TableName, config, dbFrom);
                     // TODO: could probably replace above pipeline.IsIncluded check and just assume that
                     // TODO: if doc doesn't exist, it was filtered out
                     var docToEmbed = await fromCollection.GetAsync(keyForDocToEmbed);
@@ -89,11 +90,11 @@ namespace SqlServerToCouchbase
             }
         }
 
-        private async Task<string> GetDocumentKeyFromPrimaryKeyValuesAsync(dynamic row, string tableSchema, string tableName, SqlToCbConfig config, IDbConnection sqlConnection)
+        private async Task<string> GetDocumentKeyFromPrimaryKeyValuesAsync(dynamic row, string tableSchema, string tableName, SqlToCbConfig config, IDatabaseFrom dbFrom)
         {
             // append key values together with :: delimeter
             // for compound keys
-            var keys = await config.GetPrimaryKeyNames(tableSchema, tableName, sqlConnection);
+            var keys = await config.GetPrimaryKeyNames(tableSchema, tableName, dbFrom);
             var newKey = string.Join("::", keys.Select(k => Dynamic.InvokeGet(row, k)));
 
             // if there IS no key, generate one
