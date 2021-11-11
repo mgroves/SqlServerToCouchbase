@@ -50,7 +50,9 @@ namespace SqlServerToCouchbase
             {
                 UserName = _config.TargetUsername,
                 Password = _config.TargetPassword,
-                Serializer = new DefaultSerializer(serializerSettings, serializerSettings)
+                Serializer = new DefaultSerializer(serializerSettings, serializerSettings),
+                KvIgnoreRemoteCertificateNameMismatch = true,
+                HttpIgnoreRemoteCertificateMismatch = true
             };
             _cluster = await Cluster.ConnectAsync(_config.TargetConnectionString, options);
             _logger.LogInformation("Done");
@@ -241,6 +243,8 @@ namespace SqlServerToCouchbase
         private async Task ConnectBucketAsync()
         {
             _bucket = await _cluster.BucketAsync(_config.TargetBucket);
+
+            _collManager = _bucket.Collections;
         }
 
         private async Task CreateCollectionsAsync()
@@ -363,7 +367,7 @@ namespace SqlServerToCouchbase
             // TODO: can this be removed as of 3.1.2?
             Dispose();
             await ConnectAsync();
-            await CreateBucketAsync();
+            await ConnectBucketAsync();
             // ****
 
             foreach (var table in tables)
