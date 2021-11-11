@@ -79,7 +79,7 @@ namespace WebApiExample.Couchbase.Controllers
         }
 
         [HttpPut("/person")]
-        public async Task<IActionResult> UpdatePurchaseOrderAsync(PersonUpdateApi personUpdateApi)
+        public async Task<IActionResult> UpdatePersonAsync(PersonUpdateApi personUpdateApi)
         {
             // setup bucket, cluster, and collections
             var bucket = await _bucketProvider.GetBucketAsync();
@@ -114,6 +114,7 @@ namespace WebApiExample.Couchbase.Controllers
 
                     await context.ReplaceAsync(person, personDoc);
                     await context.ReplaceAsync(email, emailDoc);
+                    
                 });
                 return Ok($"Person {personUpdateApi.PersonId} name and email updated.");
             }

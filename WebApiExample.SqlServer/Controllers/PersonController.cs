@@ -63,7 +63,7 @@ namespace WebApiExample.SqlServer.Controllers
         }
 
         [HttpPut("/person")]
-        public async Task<IActionResult> UpdatePurchaseOrderAsync(PersonUpdateApi personUpdateApi)
+        public async Task<IActionResult> UpdatePersonAsync(PersonUpdateApi personUpdateApi)
         {
             var transaction = await _context.Database.BeginTransactionAsync();
 
